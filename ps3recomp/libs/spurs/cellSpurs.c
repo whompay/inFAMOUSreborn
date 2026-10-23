@@ -2230,6 +2230,14 @@ static int v242a_ncpu_cached(void)
 static long v242a_width_workers(u32 nworkers)   /* 0 = all workers (old) */
 {
     if (nworkers < 2 || !v242a_feat(&s_v242a_width, -1)) return 0;   /* default auto (b948 FF bundle, b946 F) */
+    /* On PCs with fewer than 8 logical CPUs the cap costs fps: in-run A/B on a 6C/6T i5-9400
+     * (V242A_WIDTH_PHASE=0 parity; lean + TWSIG + NOBOOST identical, uncapped) cap-3 lost
+     * 4.0 fps (54.2 -> 50.2), p99 +1.4 ms, taskwait +2.1 ms, >20 ms frames 127 -> 42 per 300:
+     * with the cores saturated, letting every lane of a pass run on its own thread finishes
+     * the pass faster than serializing it over 2 pool workers + kernel. Same threshold as the
+     * SPURS_LANE_SPIN_US collapse ("off below 8 CPUs"). b946 (28 CPUs) found the cap
+     * fps-neutral, so >= 8 CPUs keep it. An explicit V242A_WIDTH=0|1 still wins. */
+    if (v242a_ncpu_cached() < 8 && s_v242a_width.mode < 0) return 0;
     static int s_t = -2; if (s_t == -2) { const char* e = getenv("V242A_WIDTH_THREADS"); s_t = (e && *e) ? atoi(e) : -1; }
     int t = s_t > 0 ? s_t : v242a_ncpu_cached() / 2; if (t < 2) t = 2;
     return (u32)(t - 1) >= nworkers ? 0 : (long)(t - 1);
