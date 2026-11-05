@@ -164,7 +164,12 @@ static int pad_host_window_focused(void)
     if (!fg) return 0;
     DWORD pid = 0;
     GetWindowThreadProcessId(fg, &pid);
-    return pid == GetCurrentProcessId();
+    if (pid != GetCurrentProcessId()) return 0;
+
+    /* Native Windows dialogs belong to this process, but must not capture the mouse. */
+    char class_name[64];
+    if (!GetClassNameA(fg, class_name, (int)sizeof class_name)) return 0;
+    return lstrcmpA(class_name, "ps3recomp_d3d12") == 0;
 }
 
 /* v150 KEYBOARD + MOUSE (PAD_KBM, default 1; 0 = the old key map below).
@@ -445,6 +450,13 @@ static void pad_poll_kbm(int merge)
     extern int (*volatile g_uiov_paused_fn)(void);
     static int s_mk_mode[5];   /* W A S D Enter: 0 up, 1 game/map meaning, 2 menu meaning */
     const int paused_now = g_uiov_paused_fn ? g_uiov_paused_fn() : 0;
+
+    /* Restore mouse-look when leaving the pause menu, even if the
+     * closing Esc press was missed while a native dialog had focus. */
+    static int s_was_paused = 0;
+    if (s_was_paused && !paused_now)
+        s_menu_free = 0;
+    s_was_paused = paused_now;
     /* Tab opens the world map. The pause probe takes 300 ms to notice that simulation stopped, so retain a
      * short pending window after the key press. Circle/Esc and a second Tab close it immediately; if the game
      * never pauses, the pending state expires instead of hijacking normal mouse-look. */
