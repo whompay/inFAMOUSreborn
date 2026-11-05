@@ -546,7 +546,24 @@ static MItem s_mi[] = {
                                                       { "English (US)", "English (UK)", "French", "German", "Italian", "Spanish", "Dutch", "Polish", "Portuguese", "Russian", "Korean (text)", "Chinese (text)" } },
 };
 #define MI_N ((int)(sizeof s_mi / sizeof s_mi[0]))
-enum { MR_RESUME = MI_N, MR_QUIT = MI_N + 1, MR_N = MI_N + 2 };
+enum { MR_RESUME = MI_N, MR_QUIT = MI_N + 1, MR_CONTROLS = MI_N + 2, MR_N = MI_N + 3 };
+/* Keep settings in s_mi for persistence; group three input rows under Controls. */
+enum { MC_FIRST = 3, MC_END = 6 };
+static int s_controls_page;
+static int menu_visible_rows(void)
+{
+    return s_controls_page ? MC_END - MC_FIRST + 1 : MI_N;
+}
+static int menu_item_at_row(int row)
+{
+    if (s_controls_page)
+        return row < MC_END - MC_FIRST ? MC_FIRST + row : MR_RESUME;
+    if (row < MC_FIRST) return row;
+    if (row == MC_FIRST) return MR_CONTROLS;
+    if (row < MI_N - (MC_END - MC_FIRST) + 1) return row + (MC_END - MC_FIRST) - 1;
+    if (row == MI_N - (MC_END - MC_FIRST) + 1) return MR_RESUME;
+    return MR_QUIT;
+}
 static int s_menu_inited, s_menu_sel, s_menu_confirm, s_menu_csel, s_restart_note;
 static ULONGLONG s_menu_t_open;
 static unsigned s_menu_prev;
@@ -602,7 +619,7 @@ static void menu_init(HWND hwnd)
 }
 static void menu_open(void)
 {
-    s_menu_open = 1; g_uiov_menu_open = 1; s_menu_sel = 0; s_menu_confirm = 0; s_menu_t_open = GetTickCount64();
+    s_menu_open = 1; g_uiov_menu_open = 1; s_controls_page = 0; s_menu_sel = 0; s_menu_confirm = 0; s_menu_t_open = GetTickCount64();
     s_menu_prev = 0xFFFFFFFFu;
     fprintf(stderr, "[settings] menu open\n");
 }
@@ -702,28 +719,49 @@ static int menu_tick(HWND hwnd, unsigned bbw, unsigned bbh)
             if (s_menu_quitonly) { menu_close(); return 0; }
         }
     } else {
-        if (dn & IN_UP)   s_menu_sel = (s_menu_sel + MR_N - 1) % MR_N;
-        if (dn & IN_DOWN) s_menu_sel = (s_menu_sel + 1) % MR_N;
-        if (s_menu_sel < MI_N) {
-            if (dn & IN_LEFT)  menu_change(s_menu_sel, -1, hwnd);
-            if (dn & (IN_RIGHT | IN_OK)) menu_change(s_menu_sel, +1, hwnd);
-        } else if (dn & IN_OK) {
-            if (s_menu_sel == MR_RESUME) { menu_close(); return 0; }
-            if (s_menu_sel == MR_QUIT) { s_menu_confirm = 1; s_menu_csel = 1; }
+        const int rows = menu_visible_rows();
+        if (dn & IN_UP)   s_menu_sel = (s_menu_sel + rows - 1) % rows;
+        if (dn & IN_DOWN) s_menu_sel = (s_menu_sel + 1) % rows;
+        const int item = menu_item_at_row(s_menu_sel);
+        if (item < MI_N) {
+            if (dn & IN_LEFT)  menu_change(item, -1, hwnd);
+            if (dn & (IN_RIGHT | IN_OK)) menu_change(item, +1, hwnd);
+        } else if (dn & (IN_RIGHT | IN_OK)) {
+            if (item == MR_CONTROLS) { s_controls_page = 1; s_menu_sel = 0; }
+            else if (item == MR_RESUME) {
+                if (s_controls_page) { s_controls_page = 0; s_menu_sel = MC_FIRST; }
+                else { menu_close(); return 0; }
+            }
+            else if (item == MR_QUIT && (dn & IN_OK)) { s_menu_confirm = 1; s_menu_csel = 1; }
         }
-        if (dn & (IN_BACK | IN_SELECT)) { menu_close(); return 0; }
+        if (dn & IN_BACK) {
+            if (s_controls_page) { s_controls_page = 0; s_menu_sel = MC_FIRST; }
+            else { menu_close(); return 0; }
+        }
+        if (dn & IN_SELECT) { menu_close(); return 0; }
     }
     /* mouse: hover selects, left click = next value / activate, right click = previous value */
     { float vx, vy; static POINT s_last;
       const int lb = fg && (GetAsyncKeyState(VK_LBUTTON) & 0x8000), rb = fg && (GetAsyncKeyState(VK_RBUTTON) & 0x8000);
       if (!s_menu_confirm && mouse_virt(hwnd, bbw, bbh, &vx, &vy) && vx >= s_row_x0 && vx <= s_row_x1) {
           POINT pt; GetCursorPos(&pt);
-          for (int r = 0; r < MR_N; r++) if (vy >= s_row_y0[r] && vy <= s_row_y1[r]) {
+          for (int r = 0; r < menu_visible_rows(); r++) if (vy >= s_row_y0[r] && vy <= s_row_y1[r]) {
               if (pt.x != s_last.x || pt.y != s_last.y) s_menu_sel = r;
-              if (lb && !lb_was) { if (r < MI_N) menu_change(r, +1, hwnd);
-                                   else if (r == MR_RESUME) { s_last = pt; lb_was = lb; menu_close(); return 0; }
-                                   else { s_menu_confirm = 1; s_menu_csel = 1; } }
-              if (rb && !rb_was && r < MI_N) menu_change(r, -1, hwnd);
+              const int item = menu_item_at_row(r);
+              if (lb && !lb_was) {
+                  if (item < MI_N) menu_change(item, +1, hwnd);
+                  else if (item == MR_CONTROLS) {
+                      s_controls_page = 1; s_menu_sel = 0;
+                      s_last = pt; lb_was = lb; return 1;
+                  } else if (item == MR_RESUME) {
+                      if (s_controls_page) {
+                          s_controls_page = 0; s_menu_sel = MC_FIRST;
+                          s_last = pt; lb_was = lb; return 1;
+                      }
+                      s_last = pt; lb_was = lb; menu_close(); return 0;
+                  } else { s_menu_confirm = 1; s_menu_csel = 1; }
+              }
+              if (rb && !rb_was && item < MI_N) menu_change(item, -1, hwnd);
           }
           s_last = pt;
       } else if (s_menu_confirm && lb && !lb_was) { s_menu_csel ^= 0; }
@@ -763,7 +801,8 @@ static void build_menu(void)
 {
     static const float BLUE[3] = { 0.36f, 0.72f, 1.0f };
     /* v243K: rows shrink when the list grows (720-unit virtual height): 40 units / 26 pt up to 11 rows */
-    const float rh = MR_N <= 11 ? 40.0f : (376.0f / (float)MR_N > 30.0f ? 376.0f / (float)MR_N : 30.0f);
+    const int rows = menu_visible_rows();
+    const float rh = rows <= 11 ? 40.0f : (376.0f / (float)rows > 30.0f ? 376.0f / (float)rows : 30.0f);
     const float cx = s_vw * 0.5f, lsz = rh * 0.65f;
     float c0[4], c1[4], wt[4], gr[4], bl[4];
     if (s_menu_quitonly) {   /* v195: "Quit Game" from the pause menu: only the confirmation */
@@ -780,33 +819,38 @@ static void build_menu(void)
         rect(lx0, ys[i], cx, ys[i] + 2, c0, c1, 1); rect(cx, ys[i], lx1, ys[i] + 2, c1, c0, 1);
     }
     rgba(wt, 0.97f, 0.97f, 0.97f, 1); rgba(gr, 0.60f, 0.60f, 0.60f, 1); rgba(bl, BLUE[0], BLUE[1], BLUE[2], 1);
-    const char* title = "SETTINGS";
-    text_draw(title, 8, cx - text_width(title, 8, 38.0f) * 0.5f, top + 14.0f, 38.0f, wt);
+    const char* title = s_controls_page ? "CONTROLS" : "SETTINGS";
+    const int title_len = (int)strlen(title);
+    text_draw(title, title_len, cx - text_width(title, title_len, 38.0f) * 0.5f, top + 14.0f, 38.0f, wt);
     const float x0 = cx - 400.0f, x1 = cx + 400.0f;
     s_row_x0 = x0 - 20.0f; s_row_x1 = x1 + 20.0f;
-    float y = top + (MR_N <= 11 ? 72.0f : 62.0f);
-    for (int r = 0; r < MR_N; r++) {
-        if (r == MR_RESUME) y += MR_N <= 11 ? 14.0f : 6.0f;
+    float y = top + (rows <= 11 ? 72.0f : 62.0f);
+    for (int r = 0; r < rows; r++) {
+        const int item = menu_item_at_row(r);
+        if (item == MR_RESUME) y += rows <= 11 ? 14.0f : 6.0f;
         const int on = (r == s_menu_sel) && !s_menu_confirm;
         s_row_y0[r] = y - 4.0f; s_row_y1[r] = y + rh - 4.0f;
         if (on) { rgba(c0, BLUE[0], BLUE[1], BLUE[2], 0.0f); rgba(c1, BLUE[0], BLUE[1], BLUE[2], 0.22f);
                   rect(x0 - 20.0f, y - 4.0f, cx, y + rh - 6.0f, c0, c1, 1); rect(cx, y - 4.0f, x1 + 20.0f, y + rh - 6.0f, c1, c0, 1);
                   rect(x0 - 20.0f, y + rh - 6.0f, x1 + 20.0f, y + rh - 4.0f, bl, bl, 0); }
         const float* col = on ? wt : gr;
-        if (r < MI_N) {
-            const MItem* m = &s_mi[r];
+        if (item < MI_N) {
+            const MItem* m = &s_mi[item];
             text_draw(m->label, (int)strlen(m->label), x0, y, lsz, col);
             if (m->restart) { const char* rs = "(restart)"; float lw = text_width(m->label, (int)strlen(m->label), lsz);
                               float g2[4]; rgba(g2, 0.45f, 0.45f, 0.45f, 1); text_draw(rs, 9, x0 + lw + 12.0f, y + rh * 0.15f, lsz * 0.7f, g2); }   /* v243K: scales with the row */
             char v[96]; snprintf(v, sizeof v, "%s   %s   %s", on ? "<" : " ", m->name[m->cur], on ? ">" : " ");
             text_draw(v, (int)strlen(v), x1 - text_width(v, (int)strlen(v), lsz), y, lsz, on ? wt : gr);
         } else {
-            const char* t = r == MR_RESUME ? "Back" : "Quit Game";
+            const char* t = item == MR_CONTROLS ? "Controls  >" :
+                            item == MR_RESUME ? (s_controls_page ? "Back to Settings" : "Back") : "Quit Game";
             text_draw(t, (int)strlen(t), x0, y, lsz, col);
         }
         y += rh;
     }
-    const char* foot = s_menu_confirm ? "" : "Up/Down select    Left/Right or click change    Esc / B close";
+    const char* foot = s_menu_confirm ? "" :
+        s_controls_page ? "Up/Down select    Left/Right or click change    Esc / B back" :
+                          "Up/Down select    Left/Right or click change    Esc / B close";
     if (*foot) text_draw(foot, (int)strlen(foot), cx - text_width(foot, (int)strlen(foot), 19.0f) * 0.5f, bot - 34.0f, 19.0f, gr);
     if (s_restart_note) { const char* n = "Settings marked (restart) apply the next time the game starts.";
         float y2[4]; rgba(y2, 1.0f, 0.82f, 0.35f, 1); text_draw(n, (int)strlen(n), cx - text_width(n, (int)strlen(n), 19.0f) * 0.5f, bot - 62.0f, 19.0f, y2); }
