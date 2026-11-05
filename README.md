@@ -68,8 +68,9 @@ Run **inFamous** (the shortcut Setup made). It opens a small options window firs
 (vsync, frame cap, resolution, language and more, saved to `settings.ini`);
 **Play** starts the game. The same settings are in the game's pause menu under
 **Settings**. Controllers work as on the console, and keyboard and mouse are supported.
-The launcher and in-game Settings menu also provide **Default Movement**: choose Walk
-(hold Shift to run) or Run (hold Shift to walk). Restart the game after changing it.
+Under **Controls** in the launcher and **Settings > Controls** in the game, the
+**Default Movement** option selects Walk (hold Shift to run) or Run (hold Shift to
+walk). Restart the game after changing it.
 
 **F10** opens the in-game trainer: God Mode, Infinite Energy, Refill Health,
 Max Health x2/x5/x10, Add XP, Karma +/-, Kill Enemies / Civilians, Super Speed
