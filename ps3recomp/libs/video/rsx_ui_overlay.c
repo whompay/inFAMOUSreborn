@@ -521,6 +521,7 @@ static MItem s_mi[] = {
     { "UI_FPS_CAP",      "Frame Rate Limit",   0, 6, { "0", "60", "50", "45", "40", "30" }, { "Off", "60 FPS", "50 FPS", "45 FPS", "40 FPS", "30 FPS" } },   /* v209b: Auto removed */
     { "KBM_GLYPHS",      "Button Prompts",     0, 3, { "1", "0", "2" }, { "Automatic", "Controller", "Keyboard & Mouse" } },
     { "PAD_MOUSE_SPEED", "Mouse Speed",        0, 5, { "900", "650", "450", "325", "225" }, { "1 (Slow)", "2", "3", "4", "5 (Fast)" } },
+    { "PAD_RUN_DEFAULT", "Default Movement",   1, 2, { "0", "1" }, { "Walk (Shift: Run)", "Run (Shift: Walk)" } },
     { "RES_SCALE",       "Resolution",         1, 5, { "1", "1.5", "2", "2.5", "3" }, { "720p", "1080p", "1440p", "1800p", "2160p (4K)" } },
     { "SHADOWS",         "Shadows",            1, 2, { "1", "0" }, { "On", "Off" } },
     { "TEX_ANISO",       "Texture Filtering",  1, 5, { "-1", "0", "4", "8", "16" }, { "Game Default", "Bilinear", "4x Anisotropic", "8x Anisotropic", "16x Anisotropic" } },
