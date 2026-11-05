@@ -401,9 +401,10 @@ static void pad_poll_kbm(int merge)
 {
     PadHostState* hs = &s_host_state[0];
     static float s_mx = 0.0f, s_my = 0.0f;
-    static int s_sens = -1, s_inv = 0, s_dz = 0, s_walk = 0;
+    static int s_sens = -1, s_inv = 0, s_dz = 0, s_walk = 0, s_run_default = 0;
     if (s_sens < 0) { s_sens = pad_envi("PAD_MOUSE_SENS", 6); s_inv = pad_envi("PAD_MOUSE_INVERT_Y", 0);
-                      s_dz = pad_envi("PAD_MOUSE_DZ", 22); s_walk = pad_envi("PAD_KBM_WALK", 64); }
+                      s_dz = pad_envi("PAD_MOUSE_DZ", 22); s_walk = pad_envi("PAD_KBM_WALK", 64);
+                      s_run_default = pad_envi("PAD_RUN_DEFAULT", 0) != 0; }
     const int focused = pad_host_window_focused();
     const long raw_dx = InterlockedExchange(&g_pad_raw_mdx, 0), raw_dy = InterlockedExchange(&g_pad_raw_mdy, 0);
     const long raw_wheel = InterlockedExchange(&g_pad_raw_wheel, 0);
@@ -503,7 +504,9 @@ static void pad_poll_kbm(int merge)
     const int keyboard_moving = (lx != 0.0f || ly != 0.0f);
     s_kbm_lstick_keys = keyboard_moving;   /* v236 */
     if (keyboard_moving) {
-        const float mag = KD(VK_SHIFT) ? 127.0f : (float)s_walk;
+        /* When running is the default, holding Shift instead selects walking speed. */
+        const int running = (KD(VK_SHIFT) != 0) != s_run_default;
+        const float mag = running ? 127.0f : (float)s_walk;
         const float n = (lx != 0.0f && ly != 0.0f) ? 0.70710678f : 1.0f;
         lx *= mag * n; ly *= mag * n;
     }
