@@ -69,6 +69,18 @@ Run **inFamous** (the shortcut Setup made). It opens a small options window firs
 **Play** starts the game. The same settings are in the game's pause menu under
 **Settings**. Controllers work as on the console, and keyboard and mouse are supported.
 
+The distance blur that hides pop-in is upsampled smoothly instead of showing blocks at high resolution
+(`DEPTH_BLUR_SMOOTH=0` for the original). In blackout areas the game starts it about four times closer;
+`DEPTH_BLUR=2` keeps it at the powered-area distance there, and `DEPTH_BLUR=0` turns it off entirely.
+
+Parked cars and wrecks are placed by a spawner that fills parking spots in a region around the camera, so
+they appear and vanish a few car lengths away. `CAR_PARK_SCALE=2` doubles that region (cars appear and vanish
+twice as far out). It only scales the spawner that places cars; `LOD_DIST_SCALE` above 1 breaks the street
+lights, so keep that one at 1.
+
+Frames with more draws than the renderer records at once (28672, reached with a high `LOD_CLASS_SCALE` in
+the city) are split into parts. That used to hang the GPU ("device lost") and now only costs some speed.
+
 **F10** opens the in-game trainer: God Mode, Infinite Energy, Refill Health,
 Max Health x2/x5/x10, Add XP, Karma +/-, Kill Enemies / Civilians, Super Speed
 and Player Model (play as Zeke, Trish, Kessler, Alden or John). Set `TRAINER=0`

@@ -202,6 +202,53 @@ static void frame_tick(unsigned fr)
 }
 } /* namespace carv */
 
+/* CAR_PARK_SCALE=<k> (default 1 = game): size of the parked-car spawner's regions. The spawner (update func_00249A30,
+ * every 360 ms from the main loop via func_003248E0; spawns func_00249230 -> vehicle create func_00218F30, the same
+ * path TrafficManager uses) asks the spatial database which parking spots lie inside a point shape from its data,
+ * rotated to the camera heading and scaled by f2 in func_002488C8: 1.0 for the spawn region, 1.25 for the keep region
+ * (func_002491F0; func_00248B88 passes 1.0). car_park_scale_mode multiplies f2 by k in func_002491F0, so the regions
+ * grow by k and wrecks appear / vanish k times further out (found 2026-10-30).
+ * The same region code serves other populators (street-lamp fill lights: scaling every caller put many more lights
+ * in range and broke them), so only spawner instances that create vehicles are scaled: func_00249A30 brackets its
+ * update with car_pop_enter / car_pop_leave, and a vehicle created inside (factory func_004F5240 -> car_pop_vehicle)
+ * marks that instance. Unmarked instances, and other callers of the region code, keep the game's size. */
+static volatile uint32_t s_pop_cur = 0;
+static uint32_t s_pop_veh[64];
+static int s_pop_nveh = 0;
+static bool car_pop_is_veh(uint32_t self) { for (int i = 0; i < s_pop_nveh; i++) if (s_pop_veh[i] == self) return true; return false; }
+extern "C" void car_pop_enter(uint32_t self) { s_pop_cur = self; }
+extern "C" void car_pop_leave(void) { s_pop_cur = 0; }
+/* Hook in func_002491F0 (only called by func_00249A30, three times per update with r8 = mode: 1 = list [cfg+0x20],
+ * scale 1.0; 0 = list [cfg+0x0], scale 1.25; 2 = list [cfg+0x40], scale 1.0, aimed by another input).
+ * CAR_PARK_MODES (bitmask, default 7 = all) picks which regions follow CAR_PARK_SCALE; the regions only work together:
+ * scaling modes 0+1 or 1 alone left almost no parked cars (tested 2026-10-30). */
+extern "C" double car_park_scale_mode(int mode)
+{
+    static double k = -1.0; static int mask = 7;
+    if (k < 0.0) {
+        const char* e = std::getenv("CAR_PARK_SCALE");
+        k = e ? std::atof(e) : 1.0;
+        if (!(k >= 0.25 && k <= 8.0)) k = 1.0;
+        e = std::getenv("CAR_PARK_MODES"); if (e && *e) mask = std::atoi(e);
+        std::fprintf(stderr, "[CARPARK] parked-car spawner regions x%.2f (CAR_PARK_SCALE; 1 = game), modes mask %d (CAR_PARK_MODES)\n", k, mask);
+    }
+    const uint32_t cur = s_pop_cur;
+    if (k == 1.0 || mode < 0 || mode > 7 || !((mask >> mode) & 1) || !cur || !car_pop_is_veh(cur)) return 1.0;
+    { static int seen = 0; if (!((seen >> mode) & 1)) { seen |= 1 << mode;
+        std::fprintf(stderr, "[CARPARK] spawner 0x%08X mode %d region scaled x%.2f\n", cur, mode, k); } }
+    return k;
+}
+
+/* Entry of func_004F5240, the type-registry factory of the vehicle class (vtable 0x00730038, size 0x420; registry
+ * entry EBOOT 0x007502F4): a vehicle created inside a spawner update marks that spawner as a vehicle spawner, so its
+ * regions follow CAR_PARK_SCALE. */
+extern "C" void car_pop_vehicle(void)
+{
+    const uint32_t cur = s_pop_cur;
+    if (cur && !car_pop_is_veh(cur) && s_pop_nveh < 64) { s_pop_veh[s_pop_nveh++] = cur;
+        std::fprintf(stderr, "[CARPARK] spawner 0x%08X creates vehicles -> its regions follow CAR_PARK_SCALE\n", cur); }
+}
+
 /* d^2 multiplier for the distance tests of func_00114F60 (1 = unchanged) */
 extern "C" double car_v233_dscale(ppu_context* ctx)
 {

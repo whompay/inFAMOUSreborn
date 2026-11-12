@@ -4618,6 +4618,59 @@ static ID3D12PipelineState* vp_get_fp_pso_impl(int vs_idx, u32 fp_addr, u32 blen
         n = rsx_fp_decompile_ex(fpu, 4096, fp_ctrl, fp_cube_units(cube_mask), hlsl, sizeof(hlsl));
     }
     if (n <= 0) { static int _e=0; if((_e < 16 && _e++ < 16)) printf("[FP] decompile fail (fp=0x%08X)\n", fp_addr); return NULL; }
+    /* DEPTH BLUR (fp code 29F3C342, see DEPTH_BLUR at the draw filter): the game's distance blur, which also hides
+     * LOD pop-in. It mixes two 320x180 blurred copies (t2, t3) into the scene with blend = saturate(slope * u + off)
+     * x strength, u ~ view distance from depth; k2 = k3 = (offA, slopeA, offB, slopeB), k4.x / k5.x = strengths.
+     * Powered areas use A 1500..8000, B 8000..15000, strength 0.5; blackout areas A 400..900, B 900..11000, 0.65
+     * (rsxcap 2026-10-30), i.e. the blur starts ~4x closer -- the "blackout blur".
+     *   DEPTH_BLUR=2: never start or finish a ramp closer, or blend stronger, than the powered values (blackout
+     *                 areas then fade like powered ones; settings already further / weaker are kept).
+     *   DEPTH_BLUR_SMOOTH (default 1): sample t2 / t3 with a cubic B-spline (4 bilinear taps) instead of one
+     *                 bilinear tap -- at RES_SCALE 2 the 320x180 copies are magnified 8x and bilinear shows blocks. */
+    if (fp_buffered && (uhash ^ 0xB0FFE7EDu) == 0x29F3C342u) {
+        static int mode = -1, smooth = -1;
+        if (mode < 0) { const char* e = getenv("DEPTH_BLUR"); mode = (e && *e) ? atoi(e) : 1;
+                        e = getenv("DEPTH_BLUR_SMOOTH"); smooth = (e && *e == '0') ? 0 : 1; }
+        static const char helpers[] =
+            "float4 rsx_dof_k(float4 k) {\n"
+            "    if (k.y <= 0.0 || k.w <= 0.0) return k;\n"
+            "    float sA = max(-k.x / k.y, 1500.0), eA = max((1.0 - k.x) / k.y, 8000.0);\n"
+            "    float sB = max(-k.z / k.w, 8000.0), eB = max((1.0 - k.z) / k.w, 15000.0);\n"
+            "    float cA = 1.0 / max(eA - sA, 1.0), cB = 1.0 / max(eB - sB, 1.0);\n"
+            "    return float4(-sA * cA, cA, -sB * cB, cB);\n"
+            "}\n"
+            "float4 rsx_dof_s(float4 k) { k.x = min(k.x, 0.5); return k; }\n"
+            "float4 rsx_dof_up(Texture2D t, SamplerState s, float2 uv) {\n"
+            "    float w, h; t.GetDimensions(w, h); float2 ts = float2(w, h);\n"
+            "    float2 p = uv * ts - 0.5, i = floor(p), f = p - i, f2 = f * f, f3 = f2 * f;\n"
+            "    float2 w0 = (1.0 - 3.0 * f + 3.0 * f2 - f3) / 6.0, w1 = (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0;\n"
+            "    float2 w2 = (1.0 + 3.0 * f + 3.0 * f2 - 3.0 * f3) / 6.0, w3 = f3 / 6.0;\n"
+            "    float2 g0 = w0 + w1, g1 = w2 + w3;\n"
+            "    float2 c0 = (i - 0.5 + w1 / g0) / ts, c1 = (i + 1.5 + w3 / g1) / ts;\n"
+            "    return g0.y * (g0.x * t.Sample(s, float2(c0.x, c0.y)) + g1.x * t.Sample(s, float2(c1.x, c0.y)))\n"
+            "         + g1.y * (g0.x * t.Sample(s, float2(c0.x, c1.y)) + g1.x * t.Sample(s, float2(c1.x, c1.y)));\n"
+            "}\n";
+        char* mn = strstr(hlsl, "main(PSInput");
+        while (mn && mn > hlsl && mn[-1] != '\n') mn--;
+        if (mn && (mode == 2 || smooth) && strlen(hlsl) + sizeof helpers < sizeof hlsl) {
+            const size_t at = (size_t)(mn - hlsl), hl = sizeof helpers - 1;
+            memmove(hlsl + at + hl, hlsl + at, strlen(hlsl + at) + 1);
+            memcpy(hlsl + at, helpers, hl);
+            if (mode == 2) {
+                hlsl_replace_all(hlsl, sizeof hlsl, "(fp_constants[2])", "(rsx_dof_k(fp_constants[2]))");
+                hlsl_replace_all(hlsl, sizeof hlsl, "(fp_constants[3])", "(rsx_dof_k(fp_constants[3]))");
+                hlsl_replace_all(hlsl, sizeof hlsl, "(fp_constants[4])", "(rsx_dof_s(fp_constants[4]))");
+                hlsl_replace_all(hlsl, sizeof hlsl, "(fp_constants[5])", "(rsx_dof_s(fp_constants[5]))");
+            }
+            if (smooth) {
+                hlsl_replace_all(hlsl, sizeof hlsl, "rsx_tex[2].Sample(rsx_samp[2], ", "rsx_dof_up(rsx_tex[2], rsx_samp[2], ");
+                hlsl_replace_all(hlsl, sizeof hlsl, "rsx_tex[3].Sample(rsx_samp[3], ", "rsx_dof_up(rsx_tex[3], rsx_samp[3], ");
+            }
+            static int _n = 0; if (_n < 4 && _n++ < 4)
+                fprintf(stderr, "[DEPTHBLUR] fp=0x%X: %s%s%c", fp_addr, mode == 2 ? "limited to the powered-area range" : "game range",
+                        smooth ? ", B-spline upsample" : "", 10);
+        }
+    }
     /* FP_LIST=1: every program the title actually compiles, with its size. A
      * fragment program that hangs the GPU shows up here as an implausible
      * instruction count long before it shows up as a TDR. */
@@ -9333,6 +9386,18 @@ static void render_frame_exec(void)
       if (ph == -2) { const char* e = getenv("RF_EARLY_PHASE"); ph = (e && *e) ? (atoi(e) & 1) : -1;
                       if (ph >= 0) fprintf(stderr, "[RF_EARLY] v228 early order only on A/B phase parity %d (RF_EARLY_PHASE)%c", ph, 10); }
       if (ph >= 0 && (g_ab_phase & 1) != ph) s_rf_early_frame = 0; }
+    /* The early order resets cmd_allocators[fi] (below) before waiting for the GPU. That is safe only because fi
+     * changes on every Present (FRAME_COUNT 2: the allocator last used two frames ago, finished by the previous
+     * exec's wait). A FRAME_SPLIT part does not Present, so the next exec has the SAME fi and reset the allocator the
+     * GPU was still executing from -> DEVICE_HUNG in that list's texture uploads (DRED: barrier/CopyTextureRegion,
+     * 0 draws done; reproduced in seconds with FRAME_SPLIT_AT=2000, 2026-10-31). Same fi as the last exec -> wait
+     * first (the old order) for this exec; the SRV / ring halves still alternate as RF_EARLY expects. */
+    { static u32 s_prev_fi = 0xFFFFFFFFu;
+      if (s_rf_early_frame && fi == s_prev_fi) {
+          s_rf_early_frame = 0;
+          static u32 n = 0; if (n++ < 4) fprintf(stderr, "[RF_EARLY] same back buffer as the previous exec (frame split / no Present): GPU wait first%c", 10);
+      }
+      s_prev_fi = fi; }
     { static u32 half = 0;
       if (rf_early_on()) half ^= 1u;
       s_dsrv_base = DRAW_SRV_BASE + half * (u32)(MAX_DRAWS * RSX_D3D_TEX_UNITS);
@@ -9574,6 +9639,48 @@ static void render_frame_exec(void)
     { static int lim = -1;
       if (lim < 0) { const char* e = getenv("DRAW_LIMIT"); lim = e ? atoi(e) : 0; }
       if (lim > 0 && s_rf_count > (u32)lim) s_rf_count = (u32)lim; }
+
+    /* DEPTH_BLUR=0 (default 1 = the game's; 2 = limited to the powered-area range, applied when the program is
+     * compiled -- see DEPTH BLUR there): drop the full-screen pass (rt = the scene, t0 depth, t2/t3 the 320x180 blurred
+     * copies) that mixes a 320x180 blur into the 720p scene by depth -- the blackout areas' blur, which upscaled from
+     * 320x180 looks blocky at RES_SCALE > 1. Skipping it leaves the scene as the fog pass wrote it (the pass reads
+     * and writes the same target). Identified by the CODE-only hash of its fragment program (fp_scan code_h,
+     * 29F3C342): the game loads its shaders at a different address each session (fp 0x00BCBA82, 0x00A45C02,
+     * 0x00BCDC02 in three runs), and fp_uh ("fph" in rsxcap) covers the inline constants and differs between the
+     * memo paths that fill it (73611844 vs 22435731 for identical bytes), so matching either flickered. code_h is
+     * cached per fp_uh. */
+    { static int on = -1;
+      if (on < 0) { const char* e = getenv("DEPTH_BLUR"); on = (e && *e == '0') ? 1 : 0;
+                    if (on) fprintf(stderr, "[DEPTHBLUR] depth blur pass (fp code 29F3C342) off%c", 10); }
+      if (on) {
+        static u32 ck[4096], cv[4096];
+        extern uint8_t* vm_base;
+        extern u32 cellGcmResolveLocated(int, u32);
+        u32 keep = 0;
+        for (u32 _d = 0; _d < s_rf_count && _d < MAX_DRAWS; _d++) {
+            const D3D12DrawRecord* r = &s_rf_draws[_d];
+            u32 code = 0;
+            if (!r->is_clear && r->fp_addr) {
+                const u32 slot = r->fp_uh ? (r->fp_uh * 2654435761u) >> 20 : 0;
+                if (r->fp_uh && ck[slot] == r->fp_uh) code = cv[slot];
+                else {
+                    const u8* uc = r->fp_uc;
+                    u32 max = 1024;
+                    if (!uc && vm_base) {
+                        const u32 foff = cellGcmResolveLocated((r->fp_addr & 0x3u) == 1, r->fp_addr & ~0x3u);
+                        if (foff != 0xFFFFFFFFu) { uc = vm_base + foff; max = 4096; }
+                    }
+                    u32 kc, fh, used;
+                    if (uc && fp_scan(uc, max, &kc, &code, &fh, &used)) { if (r->fp_uh) { ck[slot] = r->fp_uh; cv[slot] = code; } }
+                    else code = 0;
+                }
+            }
+            if (code == 0x29F3C342u) continue;
+            if (keep != _d) s_rf_draws[keep] = s_rf_draws[_d];
+            keep++;
+        }
+        s_rf_count = keep;
+      } }
 
     /* DRAW_SKIP_TEX=<hex raw offset>: drop every op binding that texture on
      * unit 0. The ducks sit behind the water's slab geometry, so removing the
@@ -11734,11 +11841,21 @@ static int recs_have_display(void)
         if (!s_d3d.draws[i].is_clear && s_d3d.draws[i].rt_off == 0) { s_rds_found = 1; s_rds_n = n; return 1; }
     s_rds_n = n; return 0;
 }
+/* FRAME_SPLIT_AT=<n> (test; default 0 = the record cap): split batches at n records instead of s_max_draws, so the
+ * split path runs on every busy frame -- reproduces the DEVICE_HUNG seen after bursts of real splits (2026-10-31,
+ * LOD_CLASS_SCALE 2.5 city frames > 28672 records). Run with D3D12_DRED=1 for the breadcrumb report. */
+static u32 frame_split_cap(void)
+{
+    static u32 at = 0xFFFFFFFFu;
+    if (at == 0xFFFFFFFFu) { const char* e = getenv("FRAME_SPLIT_AT"); at = (e && *e) ? (u32)strtoul(e, NULL, 0) : 0;
+        if (at) fprintf(stderr, "[FRAME-SPLIT] test: batches split at %u records (FRAME_SPLIT_AT)%c", at, 10); }
+    return (at >= 256u && at < s_max_draws) ? at : s_max_draws;
+}
 static void frame_split_check(void)
 {
-    const u32 n = s_d3d.draw_count;
-    if (n + 64u < s_max_draws) return;                       /* fast path: room left */
-    if (n < s_max_draws && s_d3d.merge_prev_draw) return;   /* let a BEGIN/END triangle stream finish merging */
+    const u32 n = s_d3d.draw_count, cap = frame_split_cap();
+    if (n + 64u < cap) return;                       /* fast path: room left */
+    if (n < cap && s_d3d.merge_prev_draw) return;   /* let a BEGIN/END triangle stream finish merging */
     if (!s_d3d.initialized) return;
     if (!frame_split_on()) { if (n >= s_max_draws) s_capfull_win++; return; }
     int disp = recs_have_display();   /* v219l */
