@@ -87,7 +87,7 @@ pub fn check_python() -> Check {
 }
 
 pub fn check_build_tools() -> Check {
-    match toolchain::detect_build_env() {
+    match toolchain::detect_build_env(None) {
         Ok(env) => Check::Ok(match env.vs_path {
             Some(p) => format!("Visual Studio Build Tools with Clang ({})", p.display()),
             None => format!("clang ({})", env.cc.display()),

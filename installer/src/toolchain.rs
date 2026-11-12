@@ -1,5 +1,7 @@
 //! Finding and preparing the tools the build needs: Python (in a private venv), Visual Studio's
-//! developer environment with clang-cl, CMake and Ninja.
+//! developer environment with clang-cl, CMake and Ninja. On Linux, either a native development
+//! build or (with a CMake toolchain file) the Windows game built with clang-cl, lld-link and
+//! Microsoft's headers and libraries, to be run with Proton/Wine.
 
 use crate::bail;
 use crate::util::{self, Ctx, Result};
@@ -176,6 +178,8 @@ pub struct BuildEnv {
     pub cc: PathBuf,
     pub cxx: PathBuf,
     pub vs_path: Option<PathBuf>,
+    /// CMake toolchain file of a Windows build made on another OS (`--cross`).
+    pub cross_file: Option<PathBuf>,
 }
 
 #[cfg(windows)]
@@ -243,9 +247,11 @@ fn vs_dev_env(vs: &Path) -> Result<Vec<(String, String)>> {
     Ok(env)
 }
 
-pub fn detect_build_env() -> Result<BuildEnv> {
+/// `cross`: a CMake toolchain file for building the Windows game on Linux (ignored on Windows).
+pub fn detect_build_env(cross: Option<&Path>) -> Result<BuildEnv> {
     #[cfg(windows)]
     {
+        let _ = cross;
         let vs = vs_installation().ctx(|| {
             "Visual Studio 2022 (or Build Tools) with \"Desktop development with C++\" was not found.\n    \
              Install Build Tools from https://visualstudio.microsoft.com/downloads/ and select the workload\n    \
@@ -276,12 +282,32 @@ pub fn detect_build_env() -> Result<BuildEnv> {
             cxx: cc.clone(),
             cc,
             vs_path: Some(vs),
+            cross_file: None,
         })
     }
     #[cfg(not(windows))]
     {
         let cmake = util::find_in_path("cmake", None).ctx(|| "cmake was not found on PATH")?;
         let ninja = util::find_in_path("ninja", None).ctx(|| "ninja was not found on PATH")?;
+        if let Some(file) = cross {
+            // The same clang-cl build as on Windows; the toolchain file points CMake at lld-link,
+            // llvm-rc and the Microsoft headers/libraries (linux/setup.py writes it).
+            if !file.is_file() {
+                bail!("the cross toolchain file {} is missing", file.display());
+            }
+            let cc = util::find_in_path("clang-cl", None).ctx(|| {
+                "clang-cl was not found on PATH (the Windows build needs LLVM's clang-cl)"
+            })?;
+            return Ok(BuildEnv {
+                env: Vec::new(),
+                cmake,
+                ninja,
+                cxx: cc.clone(),
+                cc,
+                vs_path: None,
+                cross_file: Some(util::absolute(file)),
+            });
+        }
         let cc = util::find_in_path("clang", None).ctx(|| "clang was not found on PATH")?;
         let cxx = util::find_in_path("clang++", None).ctx(|| "clang++ was not found on PATH")?;
         Ok(BuildEnv {
@@ -291,8 +317,35 @@ pub fn detect_build_env() -> Result<BuildEnv> {
             cc,
             cxx,
             vs_path: None,
+            cross_file: None,
         })
     }
+}
+
+/// CMake configure arguments a Windows build made on another OS needs. CMakeLists.txt probes the
+/// CPU only when it is not cross compiling, so the same test (tools/v242/cpu_probe.c) is done here:
+/// without the AVX2 feature set the compatibility build is selected, under the normal exe name.
+pub fn cross_cpu_args() -> Vec<String> {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let v3 = std::arch::is_x86_feature_detected!("ssse3")
+            && std::arch::is_x86_feature_detected!("sse4.1")
+            && std::arch::is_x86_feature_detected!("avx")
+            && std::arch::is_x86_feature_detected!("avx2")
+            && std::arch::is_x86_feature_detected!("fma")
+            && std::arch::is_x86_feature_detected!("bmi1")
+            && std::arch::is_x86_feature_detected!("bmi2")
+            && std::arch::is_x86_feature_detected!("lzcnt")
+            && std::arch::is_x86_feature_detected!("movbe")
+            && std::arch::is_x86_feature_detected!("popcnt");
+        if v3 {
+            return Vec::new();
+        }
+    }
+    vec![
+        "-DPORT_CPU_COMPAT=ON".into(),
+        "-DPORT_CPU_COMPAT_AUTO=ON".into(),
+    ]
 }
 
 /// Run a long build command: full output to `log`, ninja's `[n/m]` progress on one console line,

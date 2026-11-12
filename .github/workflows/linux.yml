@@ -1,0 +1,75 @@
+name: Linux
+
+# What can be checked without the game: the installer and the Linux setup's tests, the Windows
+# cross build of the whole ps3recomp runtime with the setup's own toolchain, and the .run package.
+
+on:
+  push:
+    paths:
+      - "installer/**"
+      - "linux/**"
+      - "ps3recomp/**"
+      - "infamous-recomp/CMakeLists.txt"
+      - ".github/workflows/linux.yml"
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Tests and cross build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt
+          cache-workspaces: installer
+
+      - name: Installer formatting and tests
+        working-directory: installer
+        run: |
+          cargo fmt --check
+          cargo test --locked --no-default-features --lib
+          cargo build --release --locked --no-default-features --bin infamous-installer
+
+      - name: Linux setup tests
+        run: python3 -m unittest discover -s linux/tests -v
+
+      - name: Toolchain (the setup's own download and xwin steps)
+        run: |
+          python3 - <<'EOF'
+          import sys
+          sys.path.insert(0, 'linux')
+          import setup
+          e = setup.Engine('ci-dest', accept_license=True)
+          e.destination = setup.Path('ci-dest').resolve()
+          e.destination.mkdir(exist_ok=True)
+          e.state = e.destination / setup.STATE
+          e.state.mkdir(exist_ok=True)
+          e.alias = setup.private_alias(e.state)
+          e.prepare_environment()
+          e.prepare_toolchain()
+          e.prepare_d3dcompiler()
+          print(e.cross_file)
+          EOF
+
+      - name: Cross build of the ps3recomp runtime (D3D12 backend, HLE libraries, SPU/PPU runtime)
+        run: |
+          A=$(python3 -c "import sys; sys.path.insert(0, 'linux'); import setup, pathlib; print(setup.private_alias(pathlib.Path('ci-dest/.linux').resolve()))")
+          export PATH="$A/toolchain/llvm/bin:$A/toolchain/cmake/bin:$A/toolchain/ninja:$PATH"
+          export LD_LIBRARY_PATH="$A/llvm-runtime/lib"
+          cmake -S ps3recomp -B build-cross -G Ninja -DCMAKE_TOOLCHAIN_FILE="$A/toolchain/windows-x64.cmake" \
+                -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="$A/env/bin/python3"
+          cmake --build build-cross --parallel
+
+      - name: Package
+        run: |
+          sh linux/package.sh --repo "${{ github.repository }}" --branch "${{ github.ref_name }}"
+          f=dist/inFamous-Linux-Setup.run
+          tail -n +"$(awk '/^__INFAMOUS_PAYLOAD__$/ { print NR + 1; exit }' "$f")" "$f" | tar -tz | sort
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: inFamous-Linux-Setup
+          path: dist/inFamous-Linux-Setup.run
