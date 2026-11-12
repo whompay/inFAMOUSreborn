@@ -68,6 +68,9 @@ Run **inFamous** (the shortcut Setup made). It opens a small options window firs
 (vsync, frame cap, resolution, language and more, saved to `settings.ini`);
 **Play** starts the game. The same settings are in the game's pause menu under
 **Settings**. Controllers work as on the console, and keyboard and mouse are supported.
+Under **Controls** in the launcher and **Settings > Controls** in the game, the
+**Default Movement** option selects Walk (hold Shift to run) or Run (hold Shift to
+walk). Restart the game after changing it.
 
 The distance blur that hides pop-in is upsampled smoothly instead of showing blocks at high resolution
 (`DEPTH_BLUR_SMOOTH=0` for the original). In blackout areas the game starts it about four times closer;
