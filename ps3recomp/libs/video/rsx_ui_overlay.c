@@ -830,14 +830,12 @@ confirm:
 }
 /* ---------------- F10 trainer page (rsx_ui_trainer.h) ----------------
  * The title supplies the rows (g_uiov_trainer); this draws them in a left-side panel so the game stays visible, owns
- * the pad while open (uiov_pad_gate) and turns input into change() calls.  While closed it draws the title's short
- * "active cheats" line (hud) at the top centre, except on the pause screen. */
+ * the pad while open (uiov_pad_gate) and turns input into change() calls. */
 #define TR_MAX_ROWS 64
 static int s_tr_sel = -1, s_tr_scroll;
 static unsigned s_tr_prev, s_tr_rep_key;
 static ULONGLONG s_tr_t_open, s_tr_rep_t;
 static float s_tr_y0[TR_MAX_ROWS], s_tr_y1[TR_MAX_ROWS], s_tr_x0, s_tr_x1;   /* last layout, for the mouse */
-static int s_tr_hud_on; static char s_tr_hud[128];
 static int tr_row(const uiov_trainer_api* t, int i, uiov_trainer_row* r)
 {
     memset(r, 0, sizeof *r);
@@ -865,21 +863,20 @@ static void tr_close(void)
     s_tr_open = 0; g_uiov_menu_open = 0; s_tr_close_ms = GetTickCount64(); s_tr_need_clear = 1;
     fprintf(stderr, "[trainer] closed\n");
 }
-/* returns 1 when the page (or the active-cheat line) wants to draw this frame */
+/* returns 1 only while the F10 trainer page needs drawing */
 static int tr_tick(HWND hwnd, unsigned bbw, unsigned bbh)
 {
     const uiov_trainer_api* t = g_uiov_trainer;
     static int f10_was, lb_was, rb_was;
-    if (!t) { s_tr_hud_on = 0; if (s_tr_open) tr_close(); return 0; }
+    if (!t) { if (s_tr_open) tr_close(); return 0; }
     const int fg = hwnd && GetForegroundWindow() == hwnd;
     const int f10 = fg && (GetAsyncKeyState(VK_F10) & 0x8000);
     const int press = f10 && !f10_was;
     f10_was = f10;
     if (!s_tr_open) {
         if (press && !D.active && !s_menu_open) tr_open();
-        else { s_tr_hud_on = t->hud ? t->hud(s_tr_hud, sizeof s_tr_hud) : 0; return s_tr_hud_on; }
+        else return 0;
     } else if (press) { tr_close(); return 0; }
-    s_tr_hud_on = 0;
     int n = t->count ? t->count() : 0; if (n > TR_MAX_ROWS) n = TR_MAX_ROWS;
     if (s_tr_sel < 0 || s_tr_sel >= n || !tr_selectable(t, s_tr_sel)) { s_tr_sel = -1; tr_move(t, n, +1); }
     /* keys / pad */
@@ -984,16 +981,6 @@ static void build_trainer(void)
     const char* foot = "Up/Down select   Left/Right change   Enter run   F10/Esc close";
     text_draw(foot, (int)strlen(foot), x0, bot - 32.0f, 15.0f, gr);
 }
-static void tr_hud_build(void)
-{
-    if (!s_tr_hud_on || !s_tr_hud[0]) return;
-    const int len = (int)strlen(s_tr_hud);
-    const float sz = 17.0f, w = text_width(s_tr_hud, len, sz), x0 = (s_vw - w) * 0.5f - 12.0f, y0 = 6.0f;
-    float bg[4], fg[4];
-    rgba(bg, 0, 0, 0, 0.45f); rgba(fg, 0.55f, 1.0f, 0.55f, 0.92f);
-    rect(x0, y0, x0 + w + 24.0f, y0 + 28.0f, bg, bg, 0);
-    text_draw(s_tr_hud, len, x0 + 12.0f, y0 + 14.0f - sz * 0.62f, sz, fg);
-}
 static void uiov_draw_list(ID3D12GraphicsCommandList* cl, D3D12_CPU_DESCRIPTOR_HANDLE rtv, unsigned bbw, unsigned bbh);
 /* v212 F1 FPS counter: frames this overlay was drawn for (= presented guest frames), averaged over 0.5 s, top-left. */
 volatile int g_uiov_show_fps = 0;
@@ -1034,7 +1021,7 @@ void uiov_render(ID3D12Device* dev, ID3D12GraphicsCommandList* cl, D3D12_CPU_DES
     /* v194: settings menu / pause hint (when no system dialog is up) */
     if (!D.active && font_load()) {
         s_k = bbh / UIOV_VW_H; s_vw = bbw / s_k;
-        int want = s_menu_open ? 0 : tr_tick(hwnd, bbw, bbh);   /* F10 trainer page / active-cheat line */
+        int want = s_menu_open ? 0 : tr_tick(hwnd, bbw, bbh);   /* F10 trainer page */
         if (!s_tr_open) want |= menu_tick(hwnd, bbw, bbh);
         if (want && gfx_init(dev, rtfmt)) {
             s_last_draw_ms = GetTickCount64();
@@ -1042,7 +1029,7 @@ void uiov_render(ID3D12Device* dev, ID3D12GraphicsCommandList* cl, D3D12_CPU_DES
             s_v = s_vbmap[s_vbi]; s_nv = 0;
             if (s_tr_open) build_trainer();
             else if (s_menu_open) build_menu();
-            else { if (s_hint_on) build_hint(); if (s_wm_on) build_watermark(); else tr_hud_build(); }   /* v238 */
+            else { if (s_hint_on) build_hint(); if (s_wm_on) build_watermark(); }   /* v238 */
             fps_build();   /* v212 */
             if (s_nv) uiov_draw_list(cl, rtv, bbw, bbh);
             return;
