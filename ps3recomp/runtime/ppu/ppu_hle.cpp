@@ -30,6 +30,8 @@
 #endif
 #include <windows.h>   /* v213 HLESTAT: QueryPerformanceCounter */
 #include <intrin.h>
+#else
+#include "../platform/win32_compat.h"   /* _InterlockedIncrement on POSIX */
 #endif
 #include <time.h>
 #include <stdio.h>
@@ -906,6 +908,7 @@ int g_hlestat_on = -1;
 static struct { uint32_t nid; const char* name; unsigned long long n, cyc; } s_hs[512];
 extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
 {
+#if defined(_WIN32)
     if (__builtin_expect(g_hlestat_on < 0, 0)) { const char* e = getenv("HLESTAT"); g_hlestat_on = (e && *e == '1'); }
     if (!g_hlestat_on || !ctx || ctx->thread_id != 1) { ps3_hle_call_impl(nid, ctx); return; }
     const unsigned long long t0 = __rdtsc();
@@ -936,4 +939,9 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
         for (int i = 0; i < 512; i++) { s_hs[i].n = 0; s_hs[i].cyc = 0; }
         g_icall_main = 0;
     }
+#else
+    /* HLESTAT times the call with the x86 TSC and calibrates it against QPC;
+     * a POSIX host keeps the plain dispatch until that has a portable clock. */
+    ps3_hle_call_impl(nid, ctx);
+#endif
 }

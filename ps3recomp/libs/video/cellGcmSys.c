@@ -35,6 +35,9 @@ static u32 s_gcm_context_ea = 0;
 #include <windows.h>
 #else
 #include <time.h>
+/* The D3D12 backend owns the write-watched vertex-cache epoch; a host without
+ * it has no cache to bump. Weak so a future backend can provide the real one. */
+__attribute__((weak)) void rsx_ww_bump(void) {}
 #endif
 
 static inline u32 gcm_read_be32_direct(const u8* p)

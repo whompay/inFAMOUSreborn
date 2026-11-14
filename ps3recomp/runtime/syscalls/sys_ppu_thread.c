@@ -1969,8 +1969,15 @@ static void fz_start_watch(void)
     HANDLE h = (HANDLE)_beginthreadex(NULL, 256 * 1024, fz_watch_thread, NULL, 0, NULL);
     if (h) CloseHandle(h);
 #else
-    pthread_t th; pthread_attr_t at; pthread_attr_init(&at); pthread_attr_setstacksize(&at, 256 * 1024);
-    pthread_create(&th, &at, fz_watch_thread, NULL); pthread_detach(th);
+    pthread_t th; pthread_attr_t at;
+    if (pthread_attr_init(&at) == 0) {
+        pthread_attr_setstacksize(&at, 256 * 1024);
+        if (pthread_create(&th, &at, fz_watch_thread, NULL) == 0) pthread_detach(th);
+        else fprintf(stderr, "[FREEZE] watchdog thread creation failed (errno %d)\n", errno);
+        pthread_attr_destroy(&at);
+    } else {
+        fprintf(stderr, "[FREEZE] watchdog thread attributes failed (errno %d)\n", errno);
+    }
 #endif
     s_fz_t0_ms = fz_now_ms();
 }

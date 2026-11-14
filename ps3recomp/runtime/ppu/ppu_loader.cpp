@@ -37,6 +37,11 @@
 #include "../memory/vm.h"   /* vm_commit -- sys_mmapper_search_and_map maps for real */
 #include "../platform/win32_compat.h"      /* Win32 types, interlocked ops, Sleep/QPC on POSIX */
 #include "../platform/win32_backtrace.h"   /* RtlCaptureStackBackTrace / GetModuleHandleA on POSIX */
+#ifndef PPU_INJECT_BASE_C
+/* The port's generated ppu_recomp.h defines this (installer/patches/...); a
+ * bare toolkit build has no lift, so keep the value the patch uses. */
+#define PPU_INJECT_BASE_C 0x20000000u
+#endif
 #ifndef _WIN32
 #include <sys/mman.h>   /* the guest-pointer trap reserves the low 4 GB */
 #include <signal.h>

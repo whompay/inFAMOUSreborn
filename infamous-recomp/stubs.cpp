@@ -19,10 +19,23 @@
 #include <string>
 
 #include "ppu_recomp.h"
+#ifndef _WIN32
+/* Win32 spelling and API shims for the POSIX build: the port's hooks below use
+ * __declspec, __stdcall, GetTickCount64 and VirtualQuery directly, as the
+ * Windows build always has (where the compiler and <windows.h> supply them). */
+#include "win32_compat.h"
+#include "msvc_compat.h"
+#endif
 /* v237B ADAPT_LOD: adaptive draw-distance factor (infamous_clock_probe.h writes it, lodx_v231.h reads it; 1 = off) */
 extern "C" { volatile float g_v237_lodf = 1.0f; }
 #include "infamous_clock_probe.h"
+#ifndef PORT_NO_TRAINER
 #include "trainer.h"   /* F10 trainer */
+#else
+/* PORT_BUILD_TRAINER=OFF: trainer.cpp is not in the build; keep its hooks no-ops. */
+static void infamous_trainer_install(void) {}
+extern "C" int infamous_trainer_anim_hook(uint32_t anim_obj) { (void)anim_obj; return 0; }
+#endif
 #include "ps3emu/ps3types.h"
 #include "ps3emu/error_codes.h"
 extern "C" uint8_t* vm_base;   /* C linkage: defined in main.cpp */
@@ -120,7 +133,9 @@ static void infamous_hangdump_start(void)
 // v194: "is the game paused?" for the settings-menu hint (rsx_ui_overlay.c): the world clock (base+4) stands still
 // while the real clock (base+0x24) keeps running -- that is the pause menu (SIM-FROZEN in infamous_clock_probe.h).
 extern "C" int (*volatile g_uiov_paused_fn)(void);
+#ifdef _WIN32
 extern "C" __declspec(dllimport) unsigned long long __stdcall GetTickCount64(void);
+#endif
 static int infamous_paused_probe(void)
 {
     using infamous_clock_probe::word; using infamous_clock_probe::base;
@@ -133,6 +148,7 @@ static int infamous_paused_probe(void)
     return tw && tr && now - tw > 300 && now - tr < 300;
 }
 
+#ifdef _WIN32
 /* ===========================================================================
  * v195 NATIVE PAUSE-MENU ENTRIES: "Settings" and "Quit Game" inside the game's own pause list.
  *
@@ -322,6 +338,11 @@ static void pm_start()
     ppu_register_function(PM_FN_TRIM, pm_native_trim);
     std::thread(pm_thread).detach();
 }
+#else
+/* The native pause-menu entries are drawn and answered by the Win32 overlay
+ * (rsx_ui_overlay.c); without it the game's own pause menu is unchanged. */
+static void pm_start(void) {}
+#endif
 
 extern "C" void ps3_load_prx_modules(void)
 {

@@ -124,3 +124,23 @@ uint32_t g_spu_image_span = 0;
 void ppu_dump_bctrl_ring(uint32_t a, const char* tag) { (void)a; (void)tag; }
 uint32_t ps3_spu_image_source_ea(uint32_t img_ea) { return img_ea; }
 
+/* ppu_loader.cpp - in-run A/B switches and profiler hooks. A game-less host
+ * never turns an experiment on and has no lifted function to resolve, so the
+ * neutral values keep every caller on its default path. */
+volatile int g_abx = 0;
+volatile int g_ab_mask = 0;
+volatile int g_ab_phase = 0;
+uint32_t ppu_prof_resolve_host(void* ra) { (void)ra; return 0; }
+void ps3_prof_register_spu_thread(void) {}
+
+/* ppu_loader.cpp - inline-access bounds published by ppu_vm_gate_update().
+ * Zero means "no bounds"; the HLE modules are not running a title here. */
+int      g_vm_fast_inline = 0;
+uint64_t g_ppu_ld_lim = 0, g_ppu_st_lim2 = 0, g_ppu_vst_lim2 = 0,
+         g_ppu_ld32_lim = 0, g_ppu_st32_lim2 = 0;
+
+/* ppu_hle.cpp - the in-flight HLE name table a blocked guest thread reports.
+ * Nothing is in flight without a guest. */
+const char* g_hle_inflight[64] = { 0 };
+const char* ps3_hle_ctx_name(uint32_t nid) { (void)nid; return 0; }
+

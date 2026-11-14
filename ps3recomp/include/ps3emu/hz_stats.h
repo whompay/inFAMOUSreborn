@@ -28,6 +28,7 @@ enum {
 };
 extern volatile long long g_hz[32];
 int ps3_hz_is_main(void);                    /* calling host thread == main guest thread */
+void ps3_hz_set_main(void);                  /* record the calling thread as the main guest thread */
 static inline unsigned long long hz_tsc(void) { return __rdtsc(); }
 #if defined(_MSC_VER) || defined(_WIN32)
 static inline void hz_add(int i, long long v) { _InterlockedExchangeAdd64((volatile long long*)&g_hz[i], v); }

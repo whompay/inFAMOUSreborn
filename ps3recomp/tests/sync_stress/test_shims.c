@@ -55,3 +55,19 @@ int spu_dispatch_frame_by_queue(uint32_t comp_queue, uint32_t work_ea)
  * never read back. */
 uint32_t g_spu_pending_evt[3];
 int      g_spu_pending_evt_valid;
+
+/* sys_event.c hands a port's event to an SPU interpreter (spu_interp.c), which
+ * this suite does not link. Nothing here binds a port to an SPU, so record the
+ * value and let the validity flag clear it, exactly as the interpreter does. */
+void spu_interp_set_pending_event(uint32_t data1, uint32_t data2, uint32_t data3)
+{
+    g_spu_pending_evt[0] = data1;
+    g_spu_pending_evt[1] = data2;
+    g_spu_pending_evt[2] = data3;
+    g_spu_pending_evt_valid = 1;
+}
+
+void spu_interp_clear_pending_event(void)
+{
+    g_spu_pending_evt_valid = 0;
+}
