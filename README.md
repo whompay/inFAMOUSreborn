@@ -40,6 +40,10 @@ Setup need one run of the new Setup on the same folder first.
 - A CPU with SSE4.1 (2008 or newer). On CPUs without AVX2 (Intel before 2013, Pentium/Celeron
   without AVX, AMD before 2015) Setup builds a slower compatibility version automatically.
   On PCs with 16 or fewer CPU threads the game uses fewer threads and less CPU (tested down to 4 threads).
+  On CPUs with more than 4 and fewer than 8 threads the per-workload thread cap is skipped: with the
+  cores saturated, running every lane of a parallel pass on its own thread finishes the pass faster
+  (bench on a 6/6 i5-9400 without a frame limiter: 50.2 -> 54.2 fps average in the same run, p99
+  frame time 25.4 -> 24.0 ms, task wait 11.4 -> 9.3 ms).
 - [Python 3.10+](https://www.python.org/downloads/) with "Add python.exe to
   PATH" ticked.
 - [Visual Studio 2022 Build Tools](https://visualstudio.microsoft.com/downloads/)
