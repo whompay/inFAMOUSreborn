@@ -3853,6 +3853,7 @@ static HRESULT create_gfx_pso(const D3D12_GRAPHICS_PIPELINE_STATE_DESC* pd, int 
 /* Per-draw bounds (only draws whose pipeline has the test). */
 static void dbt_set(float mn, float mx)
 {
+    if (!dbt_supported()) return;
     static ID3D12GraphicsCommandList* for_cl = NULL; static ID3D12GraphicsCommandList1* cl1 = NULL;
     if (for_cl != s_d3d.cmd_list) {
         if (cl1) { cl1->lpVtbl->Release(cl1); cl1 = NULL; }
@@ -6214,8 +6215,8 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
      * format rsx_texture_decode unpacks. */
     u32 pitch = (tl.dst_row_bytes + 255) & ~255u;
     int fresh = 0;
-    /* v146: mip chain (level 0 stays where it always was in the upload buffer; levels 1.. of every
-     * face are appended after all level-0 faces, each 512-byte aligned with its own 256-byte pitch) */
+    /* v146: mip chain. Levels 1.. of every face are appended after all level-0 faces,
+     * each 512-byte aligned with its own 256-byte pitch. */
     rsx_tex_level _lv[RSX_MAX_TEXTURE_LEVELS];
     /* v193: keyboard/mouse prompt icons instead of the guest's atlas (see kg_hit) */
     const u8* _kg_src = NULL;
@@ -6261,7 +6262,14 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
     }
     const u32 _rows0 = dxt ? blkrows : h;
     const u32 _nf = cube ? 6u : 1u;
-    const u64 _mip_base = (((u64)pitch * _rows0 * _nf) + 511u) & ~(u64)511u;
+    /* Every cube face is a separate copy footprint. A one-row face occupies
+     * only 256 bytes, but its successor must still start on a 512-byte boundary. */
+    const u64 upload_face_bytes = (u64)pitch * _rows0;
+    const u64 upload_face_stride = cube
+        ? (upload_face_bytes + D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT - 1u)
+            & ~(u64)(D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT - 1u)
+        : upload_face_bytes;
+    const u64 _mip_base = (upload_face_stride * _nf + 511u) & ~(u64)511u;
     u64 _mip_off[6][RSX_MAX_TEXTURE_LEVELS]; u32 _mip_pitch[RSX_MAX_TEXTURE_LEVELS];
     u64 _mip_end = _mip_base;
     for (u32 _f = 0; _f < _nf; _f++)
@@ -6334,7 +6342,7 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
         if (perf_on()) { s_perf_tex_create += perf_now() - _tc0; s_perf_tex_new++; }
     } else if (perf_on()) s_perf_tex_reup++;
     /* v32e: stage through the ring when it has room; per-texture buffer otherwise */
-    u64 _need = (_nlev > 1) ? _mip_end : (u64)pitch * (dxt ? blkrows : h) * (cube ? 6 : 1);   /* v146 */
+    u64 _need = (_nlev > 1) ? _mip_end : upload_face_stride * _nf;   /* v146 */
     u64 _roff = 0;
     int _use_ring = tex_ring_alloc(_need, &_roff);
     if (!_use_ring && t->up && s_rf_early_frame) { defer_release(t->up); t->up = NULL; }   /* v225A RF_EARLY: GPU(N-1) may still read it */
@@ -6381,7 +6389,6 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
     /* Cube textures store their 6 faces consecutively. Convert each into its own
      * slice of the upload buffer; the conversion below is unchanged and simply
      * runs once per face with off/mapped rebased. */
-    const u32 _face_rows  = dxt ? blkrows : h;
     /* The face stride is NOT one mip-0 image: RSX stores each cube face as its
      * own complete mip pyramid, so face f starts a whole pyramid (128-byte
      * aligned) in. Assuming mip-0-sized strides made face 1 land inside face 0's
@@ -6399,7 +6406,7 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
         for (u32 _i = 0; _i < _face_bytes; _i += 97) _s = _s*131 + _p[_i];
         fprintf(stderr, "[CUBEFACE] f=%u off=0x%X bytes=%u bpp=%u swz=%d csum=%08X%c",
                 _f, off, _face_bytes, bpp, swz, _s, 10); }
-    mapped = _map0 + (u64)_f * pitch * _face_rows;
+    mapped = _map0 + (u64)_f * upload_face_stride;
     /* Pixel conversion -- deswizzle, channel order, block copy -- is RSX
      * semantics and lives in rsx_texture_layout.c, so a second backend gets
      * it by calling this rather than porting the loops again. */
@@ -6554,7 +6561,7 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
                 hd[26]=1; hd[28]=24;
                 fwrite(hd, 1, 54, f);
                 for (int y = (int)h - 1; y >= 0; y--) {
-                    const u8* srow = _map0 + (u64)_face * pitch * _face_rows
+                    const u8* srow = _map0 + (u64)_face * upload_face_stride
                                      + (u64)y * pitch;
                     for (u32 x = 0; x < w; x++) {
                         u8 px[3];
@@ -6692,7 +6699,7 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
     src.PlacedFootprint.Footprint.RowPitch = pitch;
     for (u32 _f = 0; _f < _nfaces; _f++) {
         dst.SubresourceIndex        = _f * _nlev;      /* cube face = array slice (v146: x levels) */
-        src.PlacedFootprint.Offset  = (_use_ring ? _roff : 0) + (u64)_f * pitch * _face_rows;
+        src.PlacedFootprint.Offset  = (_use_ring ? _roff : 0) + (u64)_f * upload_face_stride;
         src.PlacedFootprint.Footprint.Width    = w;
         src.PlacedFootprint.Footprint.Height   = h;
         src.PlacedFootprint.Footprint.RowPitch = pitch;
