@@ -192,10 +192,27 @@ fn run_one(step: &Step, vars: &Vars, root: &Path) -> Result<()> {
     cmd.env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8")
         .env("PYTHONDONTWRITEBYTECODE", "1");
+    if !cfg!(windows) {
+        let shim = winlike_dir(root);
+        let path = match std::env::var_os("PYTHONPATH").filter(|p| !p.is_empty()) {
+            Some(p) => {
+                let mut v = vec![shim];
+                v.extend(std::env::split_paths(&p));
+                std::env::join_paths(v).ctx(|| "PYTHONPATH")?
+            }
+            None => shim.into_os_string(),
+        };
+        cmd.env("PYTHONPATH", path);
+    }
     for (k, v) in &step.env {
         cmd.env(k, vars.expand(v)?);
     }
     util::run(&mut cmd)
+}
+
+/// The folder whose sitecustomize.py makes the Python tools write files as they do on Windows.
+fn winlike_dir(root: &Path) -> PathBuf {
+    root.join(".installer").join("winlike")
 }
 
 /// Run the manifest's steps in `root`. Steps already done for this EBOOT are skipped until one
@@ -217,6 +234,12 @@ pub fn run_steps(
         st.save(&state_path)?;
     }
     fs::create_dir_all(root.join(".installer").join("work"))?;
+    if !cfg!(windows) {
+        util::write_file(
+            &winlike_dir(root).join("sitecustomize.py"),
+            include_bytes!("winlike/sitecustomize.py"),
+        )?;
+    }
     let mut failed = Vec::new();
     let mut rerun_rest = false;
     let n = m.steps.len();
@@ -292,6 +315,42 @@ pub fn lock_satisfied(root: &Path, lock: &Lock) -> Result<bool> {
     Ok(true)
 }
 
+/// A tool that writes a text file without choosing its line endings gives CRLF on Windows (where
+/// the lock was made) and LF elsewhere. If the other line ending gives exactly `want`, rewrite the
+/// file that way and return true.
+fn eol_to_hash(p: &Path, want: &str) -> Result<bool> {
+    let d = fs::read(p)?;
+    if diff::is_binary(&d) {
+        return Ok(false);
+    }
+    let lf: Vec<u8> = {
+        let mut v = Vec::with_capacity(d.len());
+        let mut i = 0;
+        while i < d.len() {
+            if d[i] == b'\r' && d.get(i + 1) == Some(&b'\n') {
+                i += 1;
+            }
+            v.push(d[i]);
+            i += 1;
+        }
+        v
+    };
+    let mut crlf = Vec::with_capacity(lf.len() + lf.len() / 16);
+    for &b in &lf {
+        if b == b'\n' {
+            crlf.push(b'\r');
+        }
+        crlf.push(b);
+    }
+    for v in [crlf, lf] {
+        if v != d && hash::sha256_hex(&v) == want {
+            util::write_file(p, &v)?;
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 pub fn patch_path(installer_dir: &Path, rel: &str) -> PathBuf {
     util::join_slash(&installer_dir.join("patches"), &format!("{rel}.patch"))
 }
@@ -313,7 +372,7 @@ pub fn apply_lock(
     let (mut patched, mut created, mut removed, mut same) = (0, 0, 0, 0);
     for e in &lock.files {
         let p = util::join_slash(root, &e.path);
-        let cur = if p.is_file() {
+        let mut cur = if p.is_file() {
             Some(hash::sha256_file(&p)?)
         } else {
             None
@@ -333,6 +392,11 @@ pub fn apply_lock(
                 if cur.is_none() && base.is_some() && util::any_match(tolerate, &e.path) {
                     util::warn(&format!("skipping {} (its optional step failed)", e.path));
                     continue;
+                }
+                if let (Some(c), Some(b)) = (&cur, base) {
+                    if c != b && eol_to_hash(&p, b)? {
+                        cur = Some(b.clone());
+                    }
                 }
                 if cur != *base {
                     problems.push(match (&cur, base) {
@@ -599,4 +663,34 @@ pub fn export_tree(m: &Manifest, root: &Path, out: &Path) -> Result<(usize, u64)
         bytes += fs::metadata(&dst).map(|x| x.len()).unwrap_or(0);
     }
     Ok((files.len(), bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn eol_to_hash_matches_only_the_recorded_bytes() {
+        let dir = std::env::temp_dir().join(format!("infamous-eol-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("ppu_recomp.h");
+        fs::write(&p, b"#pragma once\n#include <stdint.h>\n").unwrap();
+        let crlf = b"#pragma once\r\n#include <stdint.h>\r\n";
+        // Unrelated content: left alone.
+        assert!(!eol_to_hash(&p, &hash::sha256_hex(b"other\r\n")).unwrap());
+        assert_eq!(
+            fs::read(&p).unwrap(),
+            b"#pragma once\n#include <stdint.h>\n"
+        );
+        // LF output, CRLF recorded: converted.
+        assert!(eol_to_hash(&p, &hash::sha256_hex(crlf)).unwrap());
+        assert_eq!(fs::read(&p).unwrap(), crlf);
+        // And back.
+        assert!(eol_to_hash(
+            &p,
+            &hash::sha256_hex(b"#pragma once\n#include <stdint.h>\n")
+        )
+        .unwrap());
+        fs::remove_dir_all(&dir).unwrap();
+    }
 }

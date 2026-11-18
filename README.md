@@ -24,6 +24,9 @@ copies the game out of the disc image, regenerates the recompiled code from your
 copy, builds it and adds an inFamous shortcut. Running Setup again on the same
 folder updates or repairs the install and only redoes what changed.
 
+**Linux (including Steam Deck):** download **inFamous-Linux-Setup.run** instead. It builds the
+same Windows port on Linux without sudo and runs it with Proton; see [linux/README.md](linux/README.md).
+
 ## Updating
 
 When a new version is published here, players update in place instead of reinstalling:

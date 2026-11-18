@@ -34,6 +34,9 @@ USAGE
 OPTIONS
   --game DIR        your game dump: the folder that contains PS3_GAME
   --rpcs3 EXE       rpcs3.exe, used to decrypt EBOOT.BIN if there is no EBOOT.elf yet
+  --cross FILE      (Linux) build the Windows game with this CMake toolchain file (clang-cl +
+                    lld-link + Microsoft's headers and libraries), to run with Proton/Wine;
+                    default: $INFAMOUS_CROSS_FILE
   --python EXE      Python 3.10+ to use (default: py launcher / python on PATH)
   --root DIR        the port checkout (default: found from the installer's location)
   --jobs N          worker processes for the lifters (default: CPU count)
@@ -57,6 +60,7 @@ struct Opts {
     cmd: String,
     game: Option<PathBuf>,
     rpcs3: Option<PathBuf>,
+    cross: Option<PathBuf>,
     python: Option<PathBuf>,
     root: Option<PathBuf>,
     out: Option<PathBuf>,
@@ -107,6 +111,7 @@ fn parse_args() -> Result<Opts> {
             "-h" | "--help" => o.cmd = "help".into(),
             "--game" => o.game = Some(val(&mut i, &a)?.into()),
             "--rpcs3" => o.rpcs3 = Some(val(&mut i, &a)?.into()),
+            "--cross" => o.cross = Some(val(&mut i, &a)?.into()),
             "--python" => o.python = Some(val(&mut i, &a)?.into()),
             "--root" => o.root = Some(val(&mut i, &a)?.into()),
             "--out" => o.out = Some(val(&mut i, &a)?.into()),
@@ -139,6 +144,11 @@ fn parse_args() -> Result<Opts> {
     }
     if o.cmd.is_empty() {
         o.cmd = "install".into();
+    }
+    if o.cross.is_none() && !cfg!(windows) {
+        o.cross = std::env::var_os("INFAMOUS_CROSS_FILE")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from);
     }
     Ok(o)
 }
@@ -182,6 +192,15 @@ struct Session {
 }
 
 impl Session {
+    /// The toolchain file of a Windows build made on Linux; never set on Windows.
+    fn cross(&self) -> Option<&Path> {
+        if cfg!(windows) {
+            None
+        } else {
+            self.o.cross.as_deref()
+        }
+    }
+
     fn jobs(&self) -> usize {
         self.o.jobs.unwrap_or_else(|| {
             std::thread::available_parallelism()
@@ -466,7 +485,13 @@ fn cmd_install(s: &Session) -> Result<()> {
 
 fn build(s: &Session, vars: &mut Vars) -> Result<PathBuf> {
     util::heading("Compiler");
-    let env = toolchain::detect_build_env()?;
+    let env = toolchain::detect_build_env(s.cross())?;
+    if let Some(f) = &env.cross_file {
+        util::info(&format!(
+            "Windows build on this OS, toolchain file {}",
+            f.display()
+        ));
+    }
     if let Some(vs) = &env.vs_path {
         util::info(&format!("Visual Studio: {}", vs.display()));
     }
@@ -484,7 +509,7 @@ fn build(s: &Session, vars: &mut Vars) -> Result<PathBuf> {
     util::info(&format!("Compiling with {bj} parallel job(s)"));
     vars.set("build_jobs", bj.to_string());
 
-    let (configure, compile, exe) = if cfg!(windows) {
+    let (configure, compile, exe) = if cfg!(windows) || env.cross_file.is_some() {
         (&s.m.build_configure, &s.m.build_compile, &s.m.build_exe)
     } else {
         (
@@ -512,7 +537,16 @@ fn build(s: &Session, vars: &mut Vars) -> Result<PathBuf> {
         Ok(c)
     };
     util::heading("Configuring (CMake)");
-    util::run(&mut mk(configure)?)?;
+    let mut conf = mk(configure)?;
+    if let Some(f) = &env.cross_file {
+        conf.arg(format!("-DCMAKE_TOOLCHAIN_FILE={}", f.display()));
+        let cpu = toolchain::cross_cpu_args();
+        if !cpu.is_empty() {
+            util::info("This CPU has no AVX2/FMA/BMI2: building the compatibility version.");
+        }
+        conf.args(cpu);
+    }
+    util::run(&mut conf)?;
     util::heading("Compiling -- the lifted code is huge; expect a long first build");
     let log = PathBuf::from(vars.expand(&s.m.build_log)?);
     toolchain::run_logged(&mut mk(compile)?, &log)?;
@@ -636,6 +670,7 @@ fn cmd_update(s: &Session) -> Result<()> {
         jobs: s.o.jobs,
         build_jobs: s.o.build_jobs,
         rpcs3: s.o.rpcs3.clone(),
+        cross: s.o.cross.clone(),
         yes: true,
         regen,
         keep_mtimes: true,
@@ -673,6 +708,11 @@ fn write_launcher(s: &Session, vars: &Vars, exe: &Path, elf: &Path) -> Result<Pa
     let out = vars.expand(s.m.launch_stdout.as_deref().unwrap_or(""))?;
     let err = vars.expand(s.m.launch_stderr.as_deref().unwrap_or(""))?;
     write_launch_file(s, vars, exe, elf, &cwd, &out, &err)?;
+    if s.cross().is_some() {
+        // A Windows build made on Linux starts through inFamous.exe (the launcher) under
+        // Proton/Wine, which reads launch.txt; linux/setup.py makes the menu entries.
+        return Ok(s.installer_dir.join("launch.txt"));
+    }
     if cfg!(windows) {
         let mut t = String::from("@echo off\r\nrem Created by infamous-installer. Re-run the installer to regenerate.\r\nsetlocal\r\n");
         t.push_str(&format!("cd /d \"{cwd}\"\r\n"));
@@ -745,7 +785,7 @@ fn write_launch_file(
     let mut t = String::from("# Written by infamous-installer; read by inFamous.exe. Paths are relative to this checkout.\n");
     t.push_str(&format!("exe={}\n", rel(exe)));
     t.push_str(&format!("cwd={}\n", rel(Path::new(cwd))));
-    t.push_str(&format!("arg={}\n", rel(elf)));
+    t.push_str(&format!("arg={}\n", launch_arg(s, vars, elf, &rel)));
     if !out.is_empty() {
         t.push_str(&format!("stdout={out}\n"));
     }
@@ -755,7 +795,29 @@ fn write_launch_file(
     for (k, v) in &s.m.launch_env {
         t.push_str(&format!("env={k}={}\n", vars.expand(v)?));
     }
+    if s.cross().is_some() {
+        // Under Proton/Wine the game uses Microsoft's d3dcompiler_47.dll next to it (linux/setup.py
+        // puts it there), not Wine's own. Set here, it applies however inFamous.exe was started
+        // (Steam, umu), so a Steam shortcut needs no launch options.
+        t.push_str("env=WINEDLLOVERRIDES=d3dcompiler_47=n,b\n");
+    }
     util::write_file(&s.installer_dir.join("launch.txt"), t.as_bytes())
+}
+
+/// The game's argument (EBOOT.elf). A dump outside the checkout is named through the checkout's
+/// link to it in a cross build: the Windows launcher under Wine cannot use a Linux absolute path.
+fn launch_arg(s: &Session, vars: &Vars, elf: &Path, rel: &dyn Fn(&Path) -> String) -> String {
+    let elf = util::absolute(elf);
+    if s.cross().is_none() || util::rel_slash(&util::absolute(&s.root), &elf).is_some() {
+        return rel(&elf);
+    }
+    let (Some(link), Ok(game)) = (&s.m.link_name, vars.expand("{game}")) else {
+        return rel(&elf);
+    };
+    match util::rel_slash(&util::absolute(Path::new(&game)), &elf) {
+        Some(inner) if s.root.join(link).exists() => format!("{link}/{inner}"),
+        _ => rel(&elf),
+    }
 }
 
 /// Parallel compile jobs: the lifted translation units are huge, so roughly one job per 4 GB of RAM.
@@ -878,7 +940,7 @@ fn cmd_doctor(s: &Session) -> Result<()> {
         }
     }
     util::heading("Compiler");
-    match toolchain::detect_build_env() {
+    match toolchain::detect_build_env(s.cross()) {
         Ok(env) => {
             if let Some(vs) = env.vs_path {
                 util::info(&format!("OK  Visual Studio {}", vs.display()));
