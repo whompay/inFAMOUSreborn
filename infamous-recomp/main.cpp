@@ -280,7 +280,11 @@ static DWORD WINAPI frame_clock(LPVOID)
                     __llvm_profile_write_file();
 #endif
                     fflush(NULL);
+#ifdef _WIN32
                     TerminateProcess(GetCurrentProcess(), 0);
+#else
+                    _exit(0);   /* skips atexit/static destructors, like TerminateProcess */
+#endif
                 }
                 continue;
             }
@@ -527,14 +531,18 @@ static void harness_guest_caller(uint32_t opd, uint64_t a0, uint64_t a1,
  * port (<exe dir>\..\..\Infamous (Europe) (Fr,De,Es,It,Nl)\...\EBOOT.elf) and
  * apply the switches run.cmd sets, so the exe works on its own too. */
 static char g_default_elf[1024];
-static void set_default_env(const char* k, const char* v)
+static void set_env_force(const char* k, const char* v)
 {
-    if (getenv(k)) return;
 #ifdef _WIN32
     _putenv_s(k, v);
 #else
-    setenv(k, v, 0);
+    setenv(k, v, 1);
 #endif
+}
+static void set_default_env(const char* k, const char* v)
+{
+    if (getenv(k)) return;
+    set_env_force(k, v);
 }
 static const char* find_default_elf(const char* argv0)
 {
@@ -583,10 +591,10 @@ static void load_settings_ini(void)
         char* eq = strchr(line, '='); if (!eq || line[0] == ';' || line[0] == '#') continue;
         *eq = 0; char* v = eq + 1; v[strcspn(v, "\r\n")] = 0;
         for (size_t i = 0; i < sizeof keys / sizeof keys[0]; i++)
-            if (!strcmp(line, keys[i])) { _putenv_s(line, v); n++; break; }
+            if (!strcmp(line, keys[i])) { set_env_force(line, v); n++; break; }
     }
     fclose(f);
-    if (!getenv("INFAMOUS_FPS_CAP_KEY")) _putenv_s("INFAMOUS_FPS_CAP_KEY", "1");   /* the frame limiter hook must exist */
+    if (!getenv("INFAMOUS_FPS_CAP_KEY")) set_env_force("INFAMOUS_FPS_CAP_KEY", "1");   /* the frame limiter hook must exist */
     fprintf(stderr, "[settings] v194 settings.ini: %d values loaded\n", n);
 }
 
@@ -917,7 +925,7 @@ int main(int argc, char** argv)
       if (lc && *lc == '1') {
           static const char* kv[][2] = { { "ANIM_LOD", "1" }, { "ADAPT_LOD", "1" }, { "ADAPT_LOD_MIN", "0.7" } };
           for (size_t i = 0; i < sizeof kv / sizeof kv[0]; i++) {
-              _putenv_s(kv[i][0], kv[i][1]);
+              set_env_force(kv[i][0], kv[i][1]);
           }
           fprintf(stderr, "[LOW_CPU] v242B low-end preset ON (quality levers): ANIM_LOD=%s ADAPT_LOD=%s ADAPT_LOD_MIN=%s\n",
                   getenv("ANIM_LOD"), getenv("ADAPT_LOD"), getenv("ADAPT_LOD_MIN"));

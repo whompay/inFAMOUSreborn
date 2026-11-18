@@ -251,6 +251,10 @@ static void derive_vfs_root(const char* eboot)
 /* Host-provided symbols the runtime + HLE libs need. */
 extern "C" uint8_t* vm_base = nullptr;
 extern "C" uint32_t ppu_vm_size;   /* defined in ppu_loader.cpp (OOB guard) */
+/* ppu_loader.cpp flushes the guest TTY after each write when the runner asks
+ * for immediate output. This harness has no port runner; keep the console
+ * unbuffered so a boot log survives a hang or a crash. */
+extern "C" int ps3_stdout_immediate(void) { return 1; }
 extern "C" void lv2_init_syscalls(void);   /* runtime/syscalls/lv2_register.c */
 
 /* Guest-callback dispatch + RSX vblank/flip driver.

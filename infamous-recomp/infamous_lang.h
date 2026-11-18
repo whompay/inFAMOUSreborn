@@ -20,7 +20,11 @@
 #include <cstdio>
 
 /* Called by cellSysutil.c when the game reads the PS3 system language (selectany: cellSysutil.c defines it too). */
+#if defined(_MSC_VER)
 extern "C" { __declspec(selectany) void (*g_sysutil_lang_hook)(int) = nullptr; }
+#else
+extern "C" { __attribute__((weak)) void (*g_sysutil_lang_hook)(int) = nullptr; }
+#endif
 
 namespace infamous_lang {
 static const uint32_t LISTS = 0x00720868u, RELEASES = 7u;

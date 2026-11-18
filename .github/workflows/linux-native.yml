@@ -1,0 +1,90 @@
+name: Linux (native)
+
+# Native POSIX build of the toolkit and the port. This is the first stage of
+# Linux support: it compiles and runs the runtime, the host harness and the
+# port's runner against the synthetic smoke title -- no game data. The Vulkan
+# renderer is a later stage; today's Linux port falls back to the null backend.
+#
+# Windows keeps its own workflow; nothing here builds or changes D3D12.
+
+on:
+  push:
+    branches: ["main", "linux/**"]
+    paths:
+      - "ps3recomp/**"
+      - "infamous-recomp/**"
+      - "docs/linux.md"
+      - ".github/workflows/linux-native.yml"
+  pull_request:
+    paths:
+      - "ps3recomp/**"
+      - "infamous-recomp/**"
+      - "docs/linux.md"
+      - ".github/workflows/linux-native.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: GCC
+            cc: gcc
+            cxx: g++
+          - name: Clang
+            cc: clang
+            cxx: clang++
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libsdl2-dev
+
+      - name: Configure the runtime
+        run: |
+          cmake -S ps3recomp -B build-runtime -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=${{ matrix.cc }} \
+            -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
+            -DPS3RECOMP_BUILD_TESTS=ON
+
+      - name: Build the runtime
+        run: cmake --build build-runtime --parallel
+
+      - name: Run the runtime tests
+        run: ctest --test-dir build-runtime --output-on-failure
+
+      - name: Run the POSIX host harness
+        run: ./build-runtime/ps3recomp_host
+
+      - name: Run the PPU boot smoke title
+        run: ./build-runtime/ps3recomp_boot_smoke build-runtime/smoke/smoke.elf
+
+      # The smoke lift is written by the runtime configure above. It has no
+      # game code, so the port is built with its SPU lifts and trainer off;
+      # that still compiles and links every portable port source (main.cpp,
+      # stubs.cpp, the PPU scaffold and the runtime).
+      - name: Configure the port against the smoke lift
+        run: |
+          cmake -S infamous-recomp -B build-port -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=${{ matrix.cc }} \
+            -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
+            -DPS3RECOMP_DIR="$PWD/ps3recomp" \
+            -DRECOMP_DIR="$PWD/build-runtime/smoke/lift" \
+            -DPORT_ENABLE_SPU=OFF \
+            -DPORT_BUILD_TRAINER=OFF \
+            -DPORT_PPU_REGCACHE=OFF \
+            -DPORT_PGO=OFF \
+            -DPORT_CPU_AUTO=OFF
+
+      - name: Build the port
+        run: cmake --build build-port --parallel
+
+      - name: Boot the smoke title through the port runner
+        run: timeout 60 ./build-port/inFamousRecomp build-runtime/smoke/smoke.elf

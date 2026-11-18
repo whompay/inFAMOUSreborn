@@ -3813,7 +3813,9 @@ void ps3_taskwait_begin(void)
     g_spurs_tw_open_us = t_tw_t0;
     t_tw_marked = 0; t_tw_k = 0; t_tw_adapt_scans = t_tw_adapt_pauses = 0;
     t_tw_wid = spu_laneprof_on() ? tw_wid_of_wait() : -1;   /* v97f [TWCUR] */
+#ifdef _WIN32
     if (s_w16p_mode != 0) w16p_begin(t_tw_wid >= 0 ? t_tw_wid : tw_wid_of_wait());   /* v241A W16PROF */
+#endif
     if (t_tw_wid >= 0) {   /* v241A [TWSPLIT] */
         if (!s_tws_lim) { LARGE_INTEGER f, q0, q1; QueryPerformanceFrequency(&f); QueryPerformanceCounter(&q0);
             const unsigned long long c0 = __rdtsc(); do QueryPerformanceCounter(&q1); while (q1.QuadPart - q0.QuadPart < f.QuadPart / 100);

@@ -479,11 +479,16 @@ if(PORT_ENABLE_SPU)
     endif()
 endif()
 
+# The F10 trainer calls the title's lifted functions directly, so a tree
+# without the game's real lift (the toolkit smoke check, CI) can leave it out.
+option(PORT_BUILD_TRAINER "Build the F10 in-game trainer (needs the game's lifted functions)" ON)
 set(PORT_GAME_SOURCES
     main.cpp
     stubs.cpp
-    trainer.cpp      # F10 in-game trainer (trainer.h)
 )
+if(PORT_BUILD_TRAINER)
+    list(APPEND PORT_GAME_SOURCES trainer.cpp)   # F10 in-game trainer (trainer.h)
+endif()
 
 add_executable(${PROJECT_NAME}
     ${PORT_GAME_SOURCES}
@@ -492,6 +497,9 @@ add_executable(${PROJECT_NAME}
     ${RECOMP_SOURCES}
     ${SPU_SOURCES}
 )
+if(NOT PORT_BUILD_TRAINER)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE PORT_NO_TRAINER=1)
+endif()
 
 # The title-specific host glue used to be the last sizeable body of hot code
 # left at clang-cl's baseline x86-64 target.  In particular stubs.cpp contains

@@ -1156,6 +1156,11 @@ static void uiov_draw_list(ID3D12GraphicsCommandList* cl, D3D12_CPU_DESCRIPTOR_H
 }
 
 #else  /* !_WIN32: no overlay; cellMsgDialog keeps its non-interactive behaviour */
+/* The game runner and cellPad read these even where the overlay does not
+ * exist; keep the definitions so the port links and the settings menu's
+ * frame-cap row still has a value. */
+volatile int g_ui_fps_cap = -2;
+int (*volatile g_uiov_paused_fn)(void) = 0;
 int  uiov_dialog_available(void) { return 0; }
 unsigned long long uiov_last_draw_ms(void) { return 0; }
 void uiov_dialog_open(const char* m, int k, int d) { (void)m; (void)k; (void)d; }
