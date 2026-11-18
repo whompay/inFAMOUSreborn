@@ -575,7 +575,7 @@ static void load_settings_ini(void)
 {
     FILE* f = fopen("settings.ini", "r");
     if (!f) return;
-    static const char* keys[] = { "FULLSCREEN", "PRESENT_VSYNC", "UI_FPS_CAP", "KBM_GLYPHS", "PAD_MOUSE_SPEED",
+    static const char* keys[] = { "FULLSCREEN", "PRESENT_VSYNC", "UI_FPS_CAP", "KBM_GLYPHS", "PAD_MOUSE_SPEED", "PAD_RUN_DEFAULT",
                                   "RES_SCALE", "SHADOWS", "TEX_ANISO", "TEX_MIPS",
                                   "UPSCALER", "FSR_FG", "PS3_LANG" };   /* v243K menu rows (were silently dropped) */
     char line[256]; int n = 0;

@@ -382,6 +382,14 @@ const CONTROLS: &[Row] = &[
         names: &["1 (Slow)", "2", "3", "4", "5 (Fast)"],
         fallback: 2,
     },
+    Row {
+        key: "PAD_RUN_DEFAULT",
+        label: "Default Movement",
+        hint: "Walk: hold Shift to run. Run: hold Shift to walk. Requires a restart.",
+        vals: &["0", "1"],
+        names: &["Walk (Shift: Run)", "Run (Shift: Walk)"],
+        fallback: 0,
+    },
 ];
 
 const GAME: &[Row] = &[Row {
@@ -426,6 +434,7 @@ const INI_ORDER: &[&str] = &[
     "UI_FPS_CAP",
     "KBM_GLYPHS",
     "PAD_MOUSE_SPEED",
+    "PAD_RUN_DEFAULT",
     "RES_SCALE",
     "SHADOWS",
     "TEX_ANISO",
