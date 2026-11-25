@@ -216,6 +216,71 @@ static DWORD WINAPI frame_clock(LPVOID)
      * restores the flat Sleep(4). */
     static int s_flat = -1;
     if (s_flat < 0) { const char* e = getenv("RSX_IDLE_SLEEP"); s_flat = (e && *e == '1') ? 1 : 0; }
+    /* Optional Hor+ camera aspect (issue #19). The game derives its 3D projection
+     * from a 16/9f value that is reallocated after cutscenes AND death, sometimes
+     * into a different heap page. INFAMOUS_ASPECT=<ratio> (e.g. 2.388889 for
+     * 3440x1440) enables a per-frame watch that rewrites 16/9f and 9/16f (either
+     * byte order) to the requested aspect and its reciprocal. Known copies are
+     * tracked and a wider range is rescanned periodically so the fix survives
+     * death/reload. Off by default; INFAMOUS_ASPECT_RANGE=lo:hi sets the page. */
+    { static int s_asp = -1, s_tick = 0, s_nhot = 0;
+      static uint32_t s_wide_h = 0, s_wide_b = 0, s_inv_h = 0, s_inv_b = 0;
+      static uint32_t s_hot[512];
+      if (s_asp < 0) {
+          const char* e = getenv("INFAMOUS_ASPECT");
+          double d = e ? atof(e) : 0.0;
+          s_asp = (d > 1.0 && d < 4.0) ? 1 : 0;
+          if (s_asp) {
+              float w = (float)d, inv = (float)(1.0 / d);
+              uint32_t wb, ib;
+              memcpy(&wb, &w, 4); memcpy(&ib, &inv, 4);
+              s_wide_h = wb; s_inv_h = ib;
+              s_wide_b = ((wb & 0xFFu) << 24) | ((wb & 0xFF00u) << 8) |
+                         ((wb >> 8) & 0xFF00u) | (wb >> 24);
+              s_inv_b  = ((ib & 0xFFu) << 24) | ((ib & 0xFF00u) << 8) |
+                         ((ib >> 8) & 0xFF00u) | (ib >> 24);
+              fprintf(stderr, "[aspect] Hor+ camera %.5f (INFAMOUS_ASPECT)%c", d, 10);
+          }
+      }
+      if (s_asp && vm_base) {
+          unsigned long long page_lo = 0x49C00000ull, page_hi = 0x49D00000ull;
+          const char* rg = getenv("INFAMOUS_ASPECT_RANGE");
+          if (rg && sscanf(rg, "%llx:%llx", &page_lo, &page_hi) != 2) {
+              page_lo = 0x49C00000ull; page_hi = 0x49D00000ull;
+          }
+          /* neighbouring heap pages are scanned occasionally too, because the
+           * camera object can be reallocated elsewhere after a death */
+          s_tick++;
+          int broad = (s_tick % 60) == 1 || s_nhot == 0;
+          unsigned long long lo = broad ? (page_lo & ~0x00FFFFFFull) : page_lo;
+          unsigned long long hi = broad ? ((page_hi + 0x00FFFFFFull) & ~0x00FFFFFFull) : page_hi;
+          for (unsigned long long a = lo; a + 4 <= hi; a += 4) {
+              uint32_t* p = (uint32_t*)(vm_base + a);
+              uint32_t v = *p, nv = v;
+              if      (v == 0x3FE38E39u) nv = s_wide_h;
+              else if (v == 0x398EE33Fu) nv = s_wide_b;
+              else if (v == 0x3F100000u) nv = s_inv_h;
+              else if (v == 0x0000103Fu) nv = s_inv_b;
+              if (nv != v) {
+                  *p = nv;
+                  if (s_nhot < 512) {
+                      uint32_t k = 0; while (k < s_nhot && s_hot[k] != (uint32_t)a) k++;
+                      if (k == s_nhot) s_hot[s_nhot++] = (uint32_t)a;
+                  }
+              }
+          }
+          /* keep known camera copies correct even when they land outside the page */
+          for (int k = 0; k < s_nhot; k++) {
+              uint32_t* p = (uint32_t*)(vm_base + s_hot[k]);
+              uint32_t v = *p, nv = v;
+              if      (v == 0x3FE38E39u) nv = s_wide_h;
+              else if (v == 0x398EE33Fu) nv = s_wide_b;
+              else if (v == 0x3F100000u) nv = s_inv_h;
+              else if (v == 0x0000103Fu) nv = s_inv_b;
+              if (nv != v) *p = nv;
+          }
+      }
+    }
     for (;;) {
 #ifdef _WIN32
         /* v198 ABX 0x20000: FIFO thread at HIGHEST (in-run A/B; it publishes the fence the main thread waits on) */
@@ -632,6 +697,47 @@ static DWORD WINAPI drain(LPVOID p)
     Stream* s = (Stream*)p;
     char* buf = (char*)malloc(1 << 18);
     if (!buf) return 0;
+    /* Optional 21:9 camera aspect (issue #19). The game derives its 3D projection
+     * from a 16/9f value that is reallocated after cutscenes, so a one-shot patch
+     * stops working. INFAMOUS_ASPECT=<float> (e.g. 2.3888889 for 3440x1440) makes
+     * this watch the camera address range every frame and rewrite 16/9f and 9/16f
+     * (in either byte order) to the requested aspect and its reciprocal. Off by
+     * default; INFAMOUS_ASPECT_RANGE=lo:hi overrides the scanned range. */
+    { static int s_asp = -1;
+      static uint32_t s_wide_h = 0, s_wide_b = 0, s_inv_h = 0, s_inv_b = 0;
+      if (s_asp < 0) {
+          const char* e = getenv("INFAMOUS_ASPECT");
+          double d = e ? atof(e) : 0.0;
+          s_asp = (d > 1.0 && d < 4.0) ? 1 : 0;
+          if (s_asp) {
+              float w = (float)d, inv = (float)(1.0 / d);
+              uint32_t wb, ib;
+              memcpy(&wb, &w, 4); memcpy(&ib, &inv, 4);
+              s_wide_h = wb; s_inv_h = ib;
+              s_wide_b = ((wb & 0xFFu) << 24) | ((wb & 0xFF00u) << 8) |
+                         ((wb >> 8) & 0xFF00u) | (wb >> 24);
+              s_inv_b  = ((ib & 0xFFu) << 24) | ((ib & 0xFF00u) << 8) |
+                         ((ib >> 8) & 0xFF00u) | (ib >> 24);
+              fprintf(stderr, "[aspect] Hor+ camera %.5f (INFAMOUS_ASPECT)%c", d, 10);
+          }
+      }
+      if (s_asp && vm_base) {
+          unsigned long long lo = 0x49C00000ull, hi = 0x49D00000ull;
+          const char* rg = getenv("INFAMOUS_ASPECT_RANGE");
+          if (rg && sscanf(rg, "%llx:%llx", &lo, &hi) != 2) {
+              lo = 0x49C00000ull; hi = 0x49D00000ull;
+          }
+          for (unsigned long long a = lo; a + 4 <= hi; a += 4) {
+              uint32_t* p = (uint32_t*)(vm_base + a);
+              uint32_t v = *p, nv = v;
+              if      (v == 0x3FE38E39u) nv = s_wide_h;
+              else if (v == 0x398EE33Fu) nv = s_wide_b;
+              else if (v == 0x3F100000u) nv = s_inv_h;
+              else if (v == 0x0000103Fu) nv = s_inv_b;
+              if (nv != v) *p = nv;
+          }
+      }
+    }
     for (;;) {
         DWORD n = 0;
         if (!ReadFile(s->rd, buf, 1u << 18, &n, NULL) || n == 0) break;   /* EOF / broken pipe = writers gone */
