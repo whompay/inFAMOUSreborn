@@ -90,6 +90,14 @@ Max Health x2/x5/x10, Add XP, Karma +/-, Kill Enemies / Civilians, Super Speed
 and Player Model (play as Zeke, Trish, Kessler, Alden or John). Set `TRAINER=0`
 to turn it off.
 
+## Ultrawide (21:9 / 32:9)
+
+The game builds its 3D projection from a `16/9` camera float that it reallocates after cutscenes.
+Set `INFAMOUS_ASPECT=<ratio>` to your display's aspect ratio (for example `2.388889` for 3440x1440
+or `3.555556` for 5120x1440) to keep a Hor+ picture. The port rewrites that camera value whenever
+the game recreates it, so the fix survives cutscenes and save loads; it is off by default.
+If a future build moves the value, `INFAMOUS_ASPECT_RANGE=lo:hi` changes the scanned guest range.
+Only the 3D camera is corrected; the game's 2D HUD keeps its original layout.
 ## DLSS and FSR (optional)
 
 The game can use NVIDIA DLSS / DLAA or AMD FSR for upscaling, and AMD FSR frame generation.
